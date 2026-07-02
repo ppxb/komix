@@ -1,13 +1,51 @@
+import groovy.json.JsonSlurper
+import java.io.File
+
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+repositories {
+    maven {
+        url = uri(findRustlsPlatformVerifierProject())
+        metadataSources {
+            artifact()
+            mavenPom()
+        }
+    }
+}
+
+fun findRustlsPlatformVerifierProject(): String {
+    val dependencyText = providers.exec {
+        workingDir = File(project.rootDir, "../")
+        commandLine(
+            "cargo",
+            "metadata",
+            "--format-version",
+            "1",
+            "--filter-platform",
+            "aarch64-linux-android",
+            "--manifest-path",
+            "rust/Cargo.toml",
+        )
+    }.standardOutput.asText.get()
+
+    val dependencyJson = JsonSlurper().parseText(dependencyText) as Map<*, *>
+    val packages = dependencyJson["packages"] as List<*>
+    val manifestPath = packages
+        .mapNotNull { it as? Map<*, *> }
+        .first { it["name"] == "rustls-platform-verifier-android" }["manifest_path"] as String
+
+    return File(File(manifestPath).parentFile, "maven").path
 }
 
 android {
     namespace = "com.example.komix"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -30,6 +68,10 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }
@@ -42,4 +84,8 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation("rustls:rustls-platform-verifier:0.1.1")
 }
