@@ -1,20 +1,32 @@
 mod crypto;
 
-use reqwest::Client;
+use crate::api::http::{HttpClient, HttpRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::RwLock;
 
 const VERSION: &str = "2.0.20";
+const JM_SECRET: &str = "185Hcomic3PAPP7R";
+const HOST_CONFIG_AES_SEED: &str = "diosfjckwpqpdfjkvnqQjsik";
 const AES_SEEDS: &[&str] = &["185Hcomic3PAPP7R", "18comicAPPContent"];
+const HOST_CONFIG_URLS: &[&str] = &[
+    "https://rup4a04-c02.tos-cn-hongkong.bytepluses.com/newsvr-2025.txt",
+    "https://rup4a04-c01.tos-ap-southeast-1.bytepluses.com/newsvr-2025.txt",
+];
 const FALLBACK_API_BASE: &str = "https://www.cdnhjk.net";
 const FALLBACK_IMAGE_BASE: &str = "https://cdn-msp3.jmdanjonproxy.vip";
-const USER_AGENT: &str = "okhttp/3.12.1";
+const USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 13; a1b2c3d4e Build/TQ1A.230305.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.6099.230 Mobile Safari/537.36";
 
 pub struct JmClient {
-    client: Client,
-    base_url: String,
-    image_url: String,
+    http: HttpClient,
+}
+
+#[derive(Debug, Clone)]
+struct JmEndpoints {
+    api_base_url: String,
+    image_base_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,18 +58,19 @@ pub struct SearchResult {
     pub has_more: bool,
 }
 
+impl JmEndpoints {
+    fn fallback() -> Self {
+        Self {
+            api_base_url: FALLBACK_API_BASE.to_string(),
+            image_base_url: FALLBACK_IMAGE_BASE.to_string(),
+        }
+    }
+}
+
 impl JmClient {
     pub fn new() -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .gzip(true)
-            .build()
-            .unwrap();
-
         Self {
-            client,
-            base_url: FALLBACK_API_BASE.to_string(),
-            image_url: FALLBACK_IMAGE_BASE.to_string(),
+            http: HttpClient::new().expect("创建 JM HTTP client 失败"),
         }
     }
 
@@ -68,19 +81,192 @@ impl JmClient {
             .unwrap_or_else(|_| "0".to_string())
     }
 
-    async fn request(&self, path: &str, params: &[(&str, String)]) -> anyhow::Result<Value> {
+    fn timestamp_seconds() -> String {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs().to_string())
+            .unwrap_or_else(|_| "0".to_string())
+    }
+
+    async fn endpoints(&self) -> JmEndpoints {
+        if let Some(cached) = endpoint_cache().read().await.clone() {
+            return cached;
+        }
+
+        match self.resolve_dynamic_endpoints().await {
+            Ok(endpoints) => {
+                *endpoint_cache().write().await = Some(endpoints.clone());
+                endpoints
+            }
+            Err(_) => JmEndpoints::fallback(),
+        }
+    }
+
+    async fn refresh_endpoints(&self) -> anyhow::Result<JmEndpoints> {
+        let endpoints = self.resolve_dynamic_endpoints().await?;
+        *endpoint_cache().write().await = Some(endpoints.clone());
+        Ok(endpoints)
+    }
+
+    async fn resolve_dynamic_endpoints(&self) -> anyhow::Result<JmEndpoints> {
+        let host_pool = self.load_host_pool().await?;
+        if host_pool.is_empty() {
+            anyhow::bail!("JM host pool 为空");
+        }
+
+        let mut picked_api_base = String::new();
+        let mut setting = None;
+
+        for domain in &host_pool {
+            match self.fetch_setting_from_domain(domain).await {
+                Ok(value) => {
+                    picked_api_base = normalize_base_url(domain).unwrap_or_default();
+                    setting = Some(value);
+                    break;
+                }
+                Err(_) => continue,
+            }
+        }
+
+        let setting = setting.ok_or_else(|| anyhow::anyhow!("所有 JM setting endpoint 均不可用"))?;
+        let image_base_url = setting
+            .get("img_host")
+            .and_then(parse_string)
+            .and_then(|url| normalize_base_url(&url))
+            .unwrap_or_else(|| FALLBACK_IMAGE_BASE.to_string());
+
+        let api_base_url = if picked_api_base.is_empty() {
+            host_pool
+                .iter()
+                .find_map(|host| normalize_base_url(host))
+                .unwrap_or_else(|| FALLBACK_API_BASE.to_string())
+        } else {
+            picked_api_base
+        };
+
+        Ok(JmEndpoints {
+            api_base_url,
+            image_base_url,
+        })
+    }
+
+    async fn load_host_pool(&self) -> anyhow::Result<Vec<String>> {
+        let raw = self.fetch_text_from_any(HOST_CONFIG_URLS).await?;
+        let encrypted = raw
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric() || matches!(*ch, '+' | '/' | '='))
+            .collect::<String>();
+        let key = crypto::md5_hash(HOST_CONFIG_AES_SEED);
+        let plain = crypto::aes_decrypt(&encrypted, &key)?;
+        let parsed = serde_json::from_str::<Value>(&plain)?;
+
+        let hosts = parsed
+            .get("Server")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(parse_string)
+                    .filter(|item| !item.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Ok(hosts)
+    }
+
+    async fn fetch_text_from_any(&self, urls: &[&str]) -> anyhow::Result<String> {
+        let mut last_error = None;
+
+        for url in urls {
+            match self
+                .http
+                .send_text(
+                    HttpRequest::get(*url)
+                        .header("accept", "text/plain, */*")
+                        .header("user-agent", USER_AGENT),
+                )
+                .await
+            {
+                Ok(response) if (200..300).contains(&response.status) => return Ok(response.body),
+                Ok(response) => {
+                    last_error = Some(anyhow::anyhow!(
+                        "status={} url={} body={}",
+                        response.status,
+                        response.final_url,
+                        response_preview(&response.body)
+                    ));
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("JM host config urls 不可用")))
+    }
+
+    async fn fetch_setting_from_domain(&self, domain: &str) -> anyhow::Result<Value> {
+        let base_url =
+            normalize_base_url(domain).ok_or_else(|| anyhow::anyhow!("JM host 非法: {domain}"))?;
+        let ts = Self::timestamp_seconds();
+        let token = crypto::md5_hash(&format!("{ts}{JM_SECRET}"));
+        let url = format!("{base_url}/setting");
+
+        let response = self
+            .http
+            .send_text(
+                HttpRequest::get(url)
+                    .query("app_img_shunt", "1")
+                    .query("t", ts.as_str())
+                    .header("accept", "application/json, text/plain, */*")
+                    .header("Token", token)
+                    .header("Tokenparam", format!("{ts},{VERSION}"))
+                    .header("user-agent", USER_AGENT),
+            )
+            .await?;
+
+        if !(200..300).contains(&response.status) {
+            anyhow::bail!(
+                "JM setting 请求失败: {}. Body starts with: {}",
+                response.status,
+                response_preview(&response.body)
+            );
+        }
+
+        let decoded = Self::decode_response_text(&response.body, &ts)?;
+        if is_error_response(&decoded) {
+            anyhow::bail!(
+                "JM setting 响应错误: {}",
+                response_preview(&decoded.to_string())
+            );
+        }
+
+        Ok(decoded)
+    }
+
+    async fn request(
+        &self,
+        path: &str,
+        params: &[(&str, String)],
+    ) -> anyhow::Result<(Value, JmEndpoints)> {
+        let endpoints = self.endpoints().await;
+
+        let value = self.request_once(&endpoints, path, params).await?;
+        Ok((value, endpoints))
+    }
+
+    async fn request_once(
+        &self,
+        endpoints: &JmEndpoints,
+        path: &str,
+        params: &[(&str, String)],
+    ) -> anyhow::Result<Value> {
         let ts = Self::timestamp_millis();
         let token = crypto::md5_hash(&format!("{ts}{VERSION}"));
-        let url = format!("{}{}", self.base_url, path);
-        let query = params
-            .iter()
-            .map(|(key, value)| (*key, value.as_str()))
-            .collect::<Vec<_>>();
+        let url = format!("{}{}", endpoints.api_base_url, path);
 
-        let mut request = self
-            .client
-            .get(&url)
-            .header("accept", "application/json")
+        let mut request = HttpRequest::get(url.as_str())
+            .header("accept", "application/json, text/plain, */*")
+            .header("connection", "Keep-Alive")
             .header("token", token)
             .header("tokenparam", format!("{ts},{VERSION}"))
             .header("user-agent", USER_AGENT);
@@ -89,19 +275,26 @@ impl JmClient {
             request = request.header("Host", host);
         }
 
-        let response = request.query(&query).send().await?;
-        let status = response.status();
-        let body = response.text().await?;
+        for (key, value) in params {
+            request = request.query(*key, value.as_str());
+        }
 
-        if !status.is_success() {
+        let response = self.http.send_text(request).await?;
+
+        if !(200..300).contains(&response.status) {
             anyhow::bail!(
                 "HTTP 请求失败: {}. Body starts with: {}",
-                status,
-                response_preview(&body)
+                response.status,
+                response_preview(&response.body)
             );
         }
 
-        Self::decode_response_text(&body, &ts)
+        let decoded = Self::decode_response_text(&response.body, &ts)?;
+        if is_error_response(&decoded) {
+            anyhow::bail!("JM 响应错误: {}", response_preview(&decoded.to_string()));
+        }
+
+        Ok(decoded)
     }
 
     fn decode_response_text(raw: &str, ts: &str) -> anyhow::Result<Value> {
@@ -155,7 +348,7 @@ impl JmClient {
     }
 
     pub async fn search(&self, keyword: &str, page: i32) -> anyhow::Result<SearchResult> {
-        let data = self
+        let (data, endpoints) = self
             .request(
                 "/search",
                 &[
@@ -166,20 +359,20 @@ impl JmClient {
             )
             .await?;
 
-        self.parse_search_result(data, page)
+        self.parse_search_result(data, page, &endpoints.image_base_url)
     }
 
     pub async fn get_comic_detail(&self, comic_id: &str) -> anyhow::Result<Comic> {
-        let data = self
+        let (data, endpoints) = self
             .request("/album", &[("id", comic_id.to_string())])
             .await?;
 
-        self.parse_comic(&data)
+        self.parse_comic(&data, &endpoints.image_base_url)
             .ok_or_else(|| anyhow::anyhow!("解析漫画详情失败"))
     }
 
     pub async fn get_chapters(&self, comic_id: &str) -> anyhow::Result<Vec<Chapter>> {
-        let data = self
+        let (data, _) = self
             .request("/album", &[("id", comic_id.to_string())])
             .await?;
 
@@ -223,7 +416,7 @@ impl JmClient {
     }
 
     pub async fn get_chapter_images(&self, chapter_id: &str) -> anyhow::Result<Vec<String>> {
-        let data = self
+        let (data, endpoints) = self
             .request(
                 "/chapter",
                 &[("id", chapter_id.to_string()), ("skip", String::new())],
@@ -238,15 +431,21 @@ impl JmClient {
         let urls = images
             .iter()
             .filter_map(parse_string)
-            .map(|img| format!("{}/media/photos/{}/{}", self.image_url, chapter_id, img))
+            .map(|img| {
+                format!(
+                    "{}/media/photos/{}/{}",
+                    endpoints.image_base_url, chapter_id, img
+                )
+            })
             .collect();
 
         Ok(urls)
     }
 
     pub async fn get_latest(&self, page: i32) -> anyhow::Result<SearchResult> {
-        let data = self
-            .request("/latest", &[("page", page.to_string())])
+        let request_page = std::cmp::max(0, page - 1);
+        let (data, endpoints) = self
+            .request("/latest", &[("page", request_page.to_string())])
             .await?;
 
         let items_value = data
@@ -258,7 +457,7 @@ impl JmClient {
 
         let items = items_value
             .iter()
-            .filter_map(|item| self.parse_comic(item))
+            .filter_map(|item| self.parse_comic(item, &endpoints.image_base_url))
             .collect::<Vec<_>>();
 
         Ok(SearchResult {
@@ -275,7 +474,7 @@ impl JmClient {
         order: &str,
         page: i32,
     ) -> anyhow::Result<SearchResult> {
-        let data = self
+        let (data, endpoints) = self
             .request(
                 "/categories/filter",
                 &[
@@ -286,10 +485,15 @@ impl JmClient {
             )
             .await?;
 
-        self.parse_search_result(data, page)
+        self.parse_search_result(data, page, &endpoints.image_base_url)
     }
 
-    fn parse_search_result(&self, data: Value, page: i32) -> anyhow::Result<SearchResult> {
+    fn parse_search_result(
+        &self,
+        data: Value,
+        page: i32,
+        image_base_url: &str,
+    ) -> anyhow::Result<SearchResult> {
         let content = data
             .get("content")
             .and_then(Value::as_array)
@@ -297,7 +501,7 @@ impl JmClient {
         let total = parse_i64(data.get("total").unwrap_or(&Value::Null));
         let items = content
             .iter()
-            .filter_map(|item| self.parse_comic(item))
+            .filter_map(|item| self.parse_comic(item, image_base_url))
             .collect::<Vec<_>>();
 
         Ok(SearchResult {
@@ -308,14 +512,14 @@ impl JmClient {
         })
     }
 
-    fn parse_comic(&self, data: &Value) -> Option<Comic> {
+    fn parse_comic(&self, data: &Value, image_base_url: &str) -> Option<Comic> {
         Some(Comic {
             id: parse_string(data.get("id")?)?,
             title: parse_string(data.get("name").unwrap_or(&Value::Null))
                 .or_else(|| parse_string(data.get("title").unwrap_or(&Value::Null)))
                 .unwrap_or_default(),
             author: parse_string_array(data.get("author").unwrap_or(&Value::Null)),
-            cover_url: self.build_cover_url(data),
+            cover_url: self.build_cover_url(data, image_base_url),
             description: parse_string(data.get("description").unwrap_or(&Value::Null))
                 .unwrap_or_default(),
             tags: parse_string_array(data.get("tags").unwrap_or(&Value::Null)),
@@ -334,7 +538,7 @@ impl JmClient {
         })
     }
 
-    fn build_cover_url(&self, data: &Value) -> String {
+    fn build_cover_url(&self, data: &Value, image_base_url: &str) -> String {
         let image = parse_string(data.get("image").unwrap_or(&Value::Null)).unwrap_or_default();
 
         if image.starts_with("http://") || image.starts_with("https://") {
@@ -342,15 +546,15 @@ impl JmClient {
         }
 
         if image.starts_with('/') {
-            return format!("{}{}", self.image_url, image);
+            return format!("{}{}", image_base_url, image);
         }
 
         if image.starts_with("media/") {
-            return format!("{}/{}", self.image_url, image);
+            return format!("{}/{}", image_base_url, image);
         }
 
         if let Some(id) = parse_string(data.get("id").unwrap_or(&Value::Null)) {
-            return format!("{}/media/albums/{}_3x4.jpg", self.image_url, id);
+            return format!("{}/media/albums/{}_3x4.jpg", image_base_url, id);
         }
 
         String::new()
@@ -392,6 +596,32 @@ fn parse_string_array(value: &Value) -> Vec<String> {
         Value::String(text) if !text.trim().is_empty() => vec![text.trim().to_string()],
         _ => vec![],
     }
+}
+
+fn is_error_response(value: &Value) -> bool {
+    let Some(map) = value.as_object() else {
+        return false;
+    };
+    let code = parse_i64(map.get("code").unwrap_or(&Value::Null));
+    code != 0 && code != 200
+}
+
+fn endpoint_cache() -> &'static RwLock<Option<JmEndpoints>> {
+    static CACHE: OnceLock<RwLock<Option<JmEndpoints>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(None))
+}
+
+fn normalize_base_url(raw: &str) -> Option<String> {
+    let value = raw.trim().trim_end_matches('/');
+    if value.is_empty() {
+        return None;
+    }
+
+    if value.starts_with("http://") || value.starts_with("https://") {
+        return Some(value.to_string());
+    }
+
+    Some(format!("https://{value}"))
 }
 
 fn request_url_host(url: &str) -> Option<String> {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../services/search_aggregator.dart';
 import '../../../models/comic.dart';
+import '../../comic_detail_page.dart';
 
 /// 搜索页 - 聚合搜索所有内置源
 class SearchPage extends StatefulWidget {
@@ -159,7 +160,7 @@ class _SearchPageState extends State<SearchPage> {
           itemCount: result.items.length > 6 ? 6 : result.items.length,
           itemBuilder: (context, index) {
             final comic = result.items[index];
-            return _buildComicCard(comic);
+            return _buildComicCard(providerId, comic);
           },
         ),
 
@@ -168,12 +169,19 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  Widget _buildComicCard(Comic comic) {
+  Widget _buildComicCard(String providerId, Comic comic) {
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () {
-          // TODO: 导航到详情页
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ComicDetailPage(
+                providerId: providerId,
+                initialComic: comic,
+              ),
+            ),
+          );
         },
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
