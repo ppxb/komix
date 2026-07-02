@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../services/search_aggregator.dart';
 import '../../../models/comic.dart';
+import '../../../providers/provider_registry.dart';
 import '../../comic_detail_page.dart';
 
 /// 搜索页 - 聚合搜索所有内置源
@@ -14,8 +15,11 @@ class SearchPage extends StatefulWidget {
 class _SearchPageState extends State<SearchPage> {
   final TextEditingController _searchController = TextEditingController();
   final SearchAggregator _searchAggregator = SearchAggregator();
+  final ProviderRegistry _providerRegistry = ProviderRegistry();
 
   Map<String, SearchResult>? _searchResults;
+  final Map<String, int> _providerPages = {};
+  final Set<String> _loadingMoreProviders = {};
   bool _isLoading = false;
   String _currentKeyword = '';
 
@@ -35,11 +39,21 @@ class _SearchPageState extends State<SearchPage> {
 
     try {
       final results = await _searchAggregator.aggregateSearch(keyword, 1);
+      if (!mounted) return;
       setState(() {
         _searchResults = results;
+        _providerPages
+          ..clear()
+          ..addEntries(
+            results.entries.map(
+              (entry) => MapEntry(entry.key, entry.value.page),
+            ),
+          );
+        _loadingMoreProviders.clear();
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -71,6 +85,8 @@ class _SearchPageState extends State<SearchPage> {
                         setState(() {
                           _searchResults = null;
                           _currentKeyword = '';
+                          _providerPages.clear();
+                          _loadingMoreProviders.clear();
                         });
                       },
                     )
@@ -123,6 +139,15 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Widget _buildProviderSection(String providerId, SearchResult result) {
+    final providerName =
+        _providerRegistry.getProvider(providerId)?.name ?? providerId;
+    final loadedCount = result.items.length;
+    final totalCount = result.total;
+    final isLoadingMore = _loadingMoreProviders.contains(providerId);
+    final canLoadMore =
+        !isLoadingMore &&
+        (result.hasMore || (totalCount > 0 && loadedCount < totalCount));
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -130,17 +155,22 @@ class _SearchPageState extends State<SearchPage> {
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 8.0),
           child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                '禁漫天堂', // TODO: 从 provider 获取名称
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
+              Expanded(
+                child: Text(
+                  providerName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 12),
               Text(
-                '${result.total} 个结果',
+                '$totalCount 个结果',
                 style: TextStyle(fontSize: 14, color: Colors.grey[600]),
               ),
             ],
@@ -157,16 +187,84 @@ class _SearchPageState extends State<SearchPage> {
             crossAxisSpacing: 8,
             mainAxisSpacing: 8,
           ),
-          itemCount: result.items.length > 6 ? 6 : result.items.length,
+          itemCount: result.items.length,
           itemBuilder: (context, index) {
             final comic = result.items[index];
             return _buildComicCard(providerId, comic);
           },
         ),
 
+        if (canLoadMore || isLoadingMore)
+          Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: Center(
+              child: FilledButton.icon(
+                onPressed: canLoadMore ? () => _loadMore(providerId) : null,
+                icon: isLoadingMore
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.expand_more),
+                label: Text(isLoadingMore ? '加载中' : '加载更多'),
+              ),
+            ),
+          ),
+
         const SizedBox(height: 24),
       ],
     );
+  }
+
+  Future<void> _loadMore(String providerId) async {
+    final currentResults = _searchResults;
+    final current = currentResults?[providerId];
+    final keyword = _currentKeyword;
+    if (current == null || keyword.trim().isEmpty) return;
+    if (_loadingMoreProviders.contains(providerId)) return;
+
+    final nextPage = (_providerPages[providerId] ?? current.page) + 1;
+    setState(() {
+      _loadingMoreProviders.add(providerId);
+    });
+
+    SearchResult? result;
+    try {
+      result = await _searchAggregator.searchFromProvider(
+        providerId,
+        keyword,
+        nextPage,
+      );
+    } finally {
+      if (mounted && keyword == _currentKeyword) {
+        setState(() {
+          _loadingMoreProviders.remove(providerId);
+        });
+      }
+    }
+
+    if (!mounted || keyword != _currentKeyword) return;
+
+    setState(() {
+      if (result == null) {
+        return;
+      }
+
+      _providerPages[providerId] = result.page;
+      _searchResults?[providerId] = SearchResult(
+        items: [...current.items, ...result.items],
+        total: result.total,
+        page: result.page,
+        hasMore: result.hasMore,
+      );
+    });
+
+    if (result == null && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('加载更多失败')));
+    }
   }
 
   Widget _buildComicCard(String providerId, Comic comic) {
