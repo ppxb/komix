@@ -136,6 +136,22 @@ class FavoriteService {
     return items;
   }
 
+  Future<List<FavoriteComic>> getFavoritesInFolder(String? folderPath) async {
+    final links = ComicLinkService.listLinks(
+      folderPath,
+      ComicFolderType.favorite,
+    );
+    final items = <FavoriteComic>[];
+    for (final link in links) {
+      final favorite = _findFavorite(link.comicUniqueKey);
+      if (favorite == null || favorite.deleted) continue;
+      final item = _fromEntity(favorite);
+      if (item.providerId.isEmpty || item.comicId.isEmpty) continue;
+      items.add(item);
+    }
+    return items;
+  }
+
   UnifiedComicFavorite? _findFavorite(String key) {
     final query = objectbox.unifiedFavoriteBox
         .query(UnifiedComicFavorite_.uniqueKey.equals(key))
