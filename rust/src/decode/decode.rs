@@ -1,0 +1,39 @@
+use anyhow::{Context, Result};
+use std::fs::{self, File};
+use std::io::Write;
+use std::path::Path;
+
+const SCRAMBLE_ID: i32 = 220980;
+
+pub struct ImageInfo {
+    pub img_data: Vec<u8>,
+    pub chapter_id: i32,
+    pub url: String,
+    pub file_name: String,
+}
+
+pub fn segmentation_picture_to_disk(image_info: ImageInfo) -> Result<()> {
+    let ImageInfo {
+        img_data,
+        chapter_id,
+        url,
+        file_name,
+    } = image_info;
+
+    let bytes =
+        super::segmentation::segmentation_picture(img_data, chapter_id, SCRAMBLE_ID, &url)?;
+    save_image(&bytes, &file_name)?;
+    Ok(())
+}
+
+fn save_image(data: &[u8], file_path: &str) -> Result<()> {
+    let path = Path::new(file_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory: {:?}", parent))?;
+    }
+    File::create(path)
+        .and_then(|mut file| file.write_all(data))
+        .with_context(|| format!("Failed to write file: {}", file_path))?;
+    Ok(())
+}

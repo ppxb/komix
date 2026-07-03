@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../models/comic.dart';
+import '../models/reader_snapshot.dart';
 import '../src/rust/bridge.dart' as rust;
 import 'base_provider.dart';
 
@@ -41,6 +42,43 @@ class JmProvider extends BaseProvider {
   Future<List<String>> getChapterImages(String chapterId) async {
     final raw = await rust.jmGetChapterImages(chapterId: chapterId);
     return _decodeRawList(raw).map((item) => item.toString()).toList();
+  }
+
+  @override
+  Future<ReaderChapterSnapshot> getReaderChapterSnapshot({
+    required Comic comic,
+    required Chapter chapter,
+    required List<Chapter> chapters,
+  }) async {
+    final images = (await getChapterImages(chapter.id))
+        .map((url) => url.trim())
+        .where((url) => url.isNotEmpty)
+        .toList(growable: false);
+
+    return ReaderChapterSnapshot(
+      providerId: id,
+      comic: comic,
+      chapter: chapter,
+      chapters: List<Chapter>.unmodifiable(chapters),
+      pages: List<ReaderPageImage>.unmodifiable(
+        images.asMap().entries.map((entry) {
+          final index = entry.key;
+          final url = entry.value;
+          final imageName = _imageNameFromUrl(url, index);
+          return ReaderPageImage(
+            id: imageName,
+            url: url,
+            path: imageName,
+            originalName: imageName,
+            extern: <String, dynamic>{
+              'decode': 'jm',
+              'chapterId': chapter.id,
+              'pictureType': 'page',
+            },
+          );
+        }),
+      ),
+    );
   }
 
   @override
@@ -86,5 +124,15 @@ class JmProvider extends BaseProvider {
     final decoded = jsonDecode(raw);
     if (decoded is List) return decoded;
     throw FormatException('Expected JSON list from Rust JM provider', raw);
+  }
+
+  String _imageNameFromUrl(String url, int index) {
+    final parsed = Uri.tryParse(url);
+    final pathSegments = parsed?.pathSegments;
+    if (pathSegments != null && pathSegments.isNotEmpty) {
+      final name = pathSegments.last.trim();
+      if (name.isNotEmpty) return name;
+    }
+    return '${index + 1}.jpg';
   }
 }

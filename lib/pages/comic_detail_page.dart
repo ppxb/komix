@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/comic.dart';
 import '../providers/provider_registry.dart';
+import '../services/favorite_service.dart';
 import '../services/reading_progress_service.dart';
 import 'reader_page.dart';
 
@@ -26,6 +29,8 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
   final GlobalKey<RefreshIndicatorState> _refreshIndicatorKey =
       GlobalKey<RefreshIndicatorState>();
   bool _isAppBarOpaque = false;
+  bool _isFavorite = false;
+  bool _isFavoriteLoading = false;
 
   String get _providerName =>
       ProviderRegistry().getProvider(widget.providerId)?.name ??
@@ -36,6 +41,7 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
     super.initState();
     _detailFuture = _loadDetail();
     _progressFuture = _loadProgress();
+    unawaited(_loadFavoriteStatus());
   }
 
   Future<_ComicDetailData> _loadDetail() async {
@@ -71,6 +77,17 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
     );
   }
 
+  Future<void> _loadFavoriteStatus() async {
+    final favorite = await FavoriteService.instance.isFavorite(
+      widget.providerId,
+      widget.initialComic.id,
+    );
+    if (!mounted) return;
+    setState(() {
+      _isFavorite = favorite;
+    });
+  }
+
   void _showRefreshIndicator() {
     final refreshIndicator = _refreshIndicatorKey.currentState;
     if (refreshIndicator == null) {
@@ -84,6 +101,35 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _toggleFavorite() async {
+    if (_isFavoriteLoading) return;
+
+    setState(() {
+      _isFavoriteLoading = true;
+    });
+
+    try {
+      final data = await _detailFuture;
+      final favorite = await FavoriteService.instance.toggleFavorite(
+        providerId: widget.providerId,
+        comic: data.comic,
+      );
+      if (!mounted) return;
+      setState(() {
+        _isFavorite = favorite;
+      });
+      _showPendingMessage(favorite ? '已添加收藏' : '已取消收藏');
+    } catch (error) {
+      if (!mounted) return;
+      _showPendingMessage(error.toString());
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isFavoriteLoading = false;
+      });
+    }
   }
 
   void _openReader(
@@ -218,12 +264,12 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
                   _showRefreshIndicator();
                   return;
                 case _DetailMenuAction.addFavorite:
-                  _showPendingMessage('收藏功能还没接上');
+                  unawaited(_toggleFavorite());
                   return;
               }
             },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
+            itemBuilder: (context) => [
+              const PopupMenuItem(
                 value: _DetailMenuAction.refresh,
                 child: ListTile(
                   leading: Icon(Icons.refresh),
@@ -232,9 +278,12 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
               ),
               PopupMenuItem(
                 value: _DetailMenuAction.addFavorite,
+                enabled: !_isFavoriteLoading,
                 child: ListTile(
-                  leading: Icon(Icons.favorite_border),
-                  title: Text('添加收藏'),
+                  leading: Icon(
+                    _isFavorite ? Icons.favorite : Icons.favorite_border,
+                  ),
+                  title: Text(_isFavorite ? '取消收藏' : '添加收藏'),
                 ),
               ),
             ],

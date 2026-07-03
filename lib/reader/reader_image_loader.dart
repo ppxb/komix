@@ -1,5 +1,7 @@
-import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/widgets.dart';
+import 'dart:io';
+
+import '../services/provider_image_cache.dart';
+import '../type/enum.dart';
 
 class ReaderImageRequest {
   final String providerId;
@@ -26,23 +28,32 @@ class ReaderImageRequest {
     return url;
   }
 
-  Map<String, String> get headers {
-    final raw = extern['headers'];
-    if (raw is! Map) return const <String, String>{};
-    return raw.map(
-      (key, value) => MapEntry(key.toString(), value.toString()),
-    );
+  PictureType get pictureType {
+    final raw = extern['pictureType'];
+    if (raw is PictureType) return raw;
+    if (raw is String) {
+      return PictureType.values.firstWhere(
+        (value) => value.name == raw,
+        orElse: () => PictureType.page,
+      );
+    }
+    return PictureType.page;
   }
 }
 
 class ReaderImageLoader {
   const ReaderImageLoader._();
 
-  static ImageProvider providerFor(ReaderImageRequest request) {
-    return CachedNetworkImageProvider(
-      request.url,
-      cacheKey: request.cacheKey,
-      headers: request.headers,
+  static Future<File> cacheFileFor(ReaderImageRequest request) async {
+    final filePath = await ProviderImageCache.getCachePicture(
+      providerId: request.providerId,
+      comicId: request.comicId,
+      chapterId: request.chapterId,
+      url: request.url,
+      path: request.path,
+      pictureType: request.pictureType,
+      extern: request.extern,
     );
+    return File(filePath);
   }
 }

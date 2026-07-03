@@ -1,0 +1,98 @@
+use anyhow::{Context, Result};
+use image::{ImageBuffer, ImageFormat, Rgb, RgbImage};
+use md5::{Digest, Md5};
+use webp::Encoder;
+
+pub(crate) fn segmentation_picture(
+    img_data: Vec<u8>,
+    chapter_id: i32,
+    scramble_id: i32,
+    url: &str,
+) -> Result<Vec<u8>> {
+    let format = image::guess_format(&img_data).context("Failed to guess image format")?;
+
+    let picture_name = url
+        .rsplit('/')
+        .next()
+        .and_then(|name| name.split('.').next())
+        .unwrap_or("");
+    let num = get_segmentation_num(chapter_id, scramble_id, picture_name);
+
+    if format == ImageFormat::Gif || num <= 1 {
+        return Ok(img_data);
+    }
+
+    let src_img: RgbImage = image::load_from_memory(&img_data)
+        .context("Failed to decode image")?
+        .to_rgb8();
+
+    let (width, height) = src_img.dimensions();
+    let block_size = height / num as u32;
+    let remainder = height % num as u32;
+
+    let mut blocks = Vec::with_capacity(num as usize);
+    for i in 0..num {
+        let start = i as u32 * block_size;
+        let end = if i == num - 1 {
+            start + block_size + remainder
+        } else {
+            start + block_size
+        };
+        blocks.push((start, end));
+    }
+
+    let mut des_img: RgbImage = ImageBuffer::<Rgb<u8>, Vec<u8>>::new(width, height);
+    rearrange_blocks_by_block(&src_img, &mut des_img, &blocks);
+
+    let encoder = Encoder::from_rgb(&des_img, width, height);
+    let webp_memory = encoder.encode(75.0);
+
+    Ok(webp_memory.to_vec())
+}
+
+fn get_segmentation_num(eps_id: i32, scramble_id: i32, picture_name: &str) -> i32 {
+    if eps_id < scramble_id {
+        0
+    } else if eps_id < 268850 {
+        10
+    } else if eps_id > 421926 {
+        let hash_str = md5_hex(&format!("{}{}", eps_id, picture_name));
+        let last_char = hash_str.chars().last().unwrap_or('0') as u8;
+        (last_char % 8) as i32 * 2 + 2
+    } else {
+        let hash_str = md5_hex(&format!("{}{}", eps_id, picture_name));
+        let last_char = hash_str.chars().last().unwrap_or('0') as u8;
+        (last_char % 10) as i32 * 2 + 2
+    }
+}
+
+fn md5_hex(input: &str) -> String {
+    let mut hasher = Md5::new();
+    hasher.update(input.as_bytes());
+    let result = hasher.finalize();
+    result.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn rearrange_blocks_by_block(src: &RgbImage, dst: &mut RgbImage, blocks: &[(u32, u32)]) {
+    let width = src.width() as usize;
+    let row_bytes = width * 3;
+
+    let src_raw = src.as_raw();
+    let dst_raw = dst.as_mut();
+
+    let mut y_pos = 0u32;
+
+    for &(start, end) in blocks.iter().rev() {
+        let block_height = (end - start) as usize;
+
+        let src_begin = start as usize * row_bytes;
+        let src_end = src_begin + block_height * row_bytes;
+
+        let dst_begin = y_pos as usize * row_bytes;
+        let dst_end = dst_begin + block_height * row_bytes;
+
+        dst_raw[dst_begin..dst_end].copy_from_slice(&src_raw[src_begin..src_end]);
+
+        y_pos += end - start;
+    }
+}

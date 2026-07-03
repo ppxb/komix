@@ -1,8 +1,25 @@
 use crate::api::jm::JmClient;
+use crate::decode::ImageInfo;
 
 /// 初始化 Rust 核心
 pub fn init() -> String {
     "Komix Core Initialized".to_string()
+}
+
+/// 保存 JM 反混淆后的图片到磁盘
+pub fn decode_jm_image_to_disk(
+    image_data: Vec<u8>,
+    chapter_id: i32,
+    file_name: String,
+    url: String,
+) -> Result<(), String> {
+    crate::decode::segmentation_picture_to_disk(ImageInfo {
+        img_data: image_data,
+        chapter_id,
+        url,
+        file_name,
+    })
+    .map_err(|error| error.to_string())
 }
 
 /// 搜索漫画 (JM 源)

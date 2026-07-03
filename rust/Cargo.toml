@@ -35,6 +35,13 @@ thiserror = "2.0"
 # 加密
 md-5 = "0.11.0"
 aes = "0.8"
+# 图片处理
+image = { version = "0.25.10", default-features = false, features = [
+    "jpeg",
+    "png",
+    "webp",
+] }
+webp = "0.3.1"
 # Base64 编解码
 base64 = "0.22"
 # HTML 解析

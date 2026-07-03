@@ -1,4 +1,5 @@
-import 'package:cached_network_image/cached_network_image.dart';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import 'reader_image_loader.dart';
@@ -9,7 +10,6 @@ class ReaderImageView extends StatefulWidget {
   final int pageCount;
   final Size displaySize;
   final bool isSizeResolved;
-  final VoidCallback onRetry;
   final ValueChanged<Size> onSizeResolved;
 
   const ReaderImageView({
@@ -19,7 +19,6 @@ class ReaderImageView extends StatefulWidget {
     required this.pageCount,
     required this.displaySize,
     required this.isSizeResolved,
-    required this.onRetry,
     required this.onSizeResolved,
   });
 
@@ -28,21 +27,26 @@ class ReaderImageView extends StatefulWidget {
 }
 
 class _ReaderImageViewState extends State<ReaderImageView> {
+  late Future<File> _imageFuture;
   ImageStream? _imageStream;
   ImageStreamListener? _imageListener;
+  String? _listeningFilePath;
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _resolveImageSize();
+  void initState() {
+    super.initState();
+    _imageFuture = ReaderImageLoader.cacheFileFor(widget.request);
   }
 
   @override
   void didUpdateWidget(covariant ReaderImageView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.request.url != widget.request.url ||
-        oldWidget.isSizeResolved != widget.isSizeResolved) {
-      _resolveImageSize();
+        oldWidget.request.path != widget.request.path ||
+        oldWidget.request.cacheKey != widget.request.cacheKey) {
+      _resetImageFuture();
+    } else if (!widget.isSizeResolved && _listeningFilePath != null) {
+      _resolveImageSize(File(_listeningFilePath!));
     }
   }
 
@@ -52,14 +56,25 @@ class _ReaderImageViewState extends State<ReaderImageView> {
     super.dispose();
   }
 
-  void _resolveImageSize() {
+  void _resetImageFuture() {
+    _removeImageListener();
+    setState(() {
+      _imageFuture = ReaderImageLoader.cacheFileFor(widget.request);
+    });
+  }
+
+  void _resolveImageSize(File file) {
     if (widget.isSizeResolved) {
       _removeImageListener();
       return;
     }
+    if (_listeningFilePath == file.path && _imageListener != null) {
+      return;
+    }
 
     _removeImageListener();
-    final provider = ReaderImageLoader.providerFor(widget.request);
+    _listeningFilePath = file.path;
+    final provider = FileImage(file);
     final stream = provider.resolve(createLocalImageConfiguration(context));
     final listener = ImageStreamListener((info, _) {
       widget.onSizeResolved(
@@ -83,6 +98,7 @@ class _ReaderImageViewState extends State<ReaderImageView> {
     }
     _imageStream = null;
     _imageListener = null;
+    _listeningFilePath = null;
   }
 
   @override
@@ -92,19 +108,41 @@ class _ReaderImageViewState extends State<ReaderImageView> {
       child: SizedBox(
         width: widget.displaySize.width,
         height: widget.displaySize.height,
-        child: CachedNetworkImage(
-          imageUrl: widget.request.url,
-          cacheKey: widget.request.cacheKey,
-          httpHeaders: widget.request.headers,
-          fit: BoxFit.contain,
-          alignment: Alignment.topCenter,
-          progressIndicatorBuilder: (context, url, progress) {
-            return Center(
-              child: CircularProgressIndicator(value: progress.progress),
+        child: FutureBuilder<File>(
+          future: _imageFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting &&
+                !snapshot.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            if (snapshot.hasError && !snapshot.hasData) {
+              return _ReaderImageErrorView(
+                message: snapshot.error.toString(),
+                onRetry: _resetImageFuture,
+              );
+            }
+
+            final file = snapshot.requireData;
+            _resolveImageSize(file);
+            return Image.file(
+              file,
+              fit: BoxFit.contain,
+              alignment: Alignment.topCenter,
+              gaplessPlayback: true,
+              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                if (wasSynchronouslyLoaded || frame != null) {
+                  return child;
+                }
+                return const Center(child: CircularProgressIndicator());
+              },
+              errorBuilder: (context, error, stackTrace) {
+                return _ReaderImageErrorView(
+                  message: error.toString(),
+                  onRetry: _resetImageFuture,
+                );
+              },
             );
-          },
-          errorWidget: (context, url, error) {
-            return _ReaderImageErrorView(onRetry: widget.onRetry);
           },
         ),
       ),
@@ -113,9 +151,13 @@ class _ReaderImageViewState extends State<ReaderImageView> {
 }
 
 class _ReaderImageErrorView extends StatelessWidget {
+  final String message;
   final VoidCallback onRetry;
 
-  const _ReaderImageErrorView({required this.onRetry});
+  const _ReaderImageErrorView({
+    required this.message,
+    required this.onRetry,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -124,10 +166,18 @@ class _ReaderImageErrorView extends StatelessWidget {
       height: 240,
       color: colorScheme.surfaceContainerHighest,
       alignment: Alignment.center,
-      child: TextButton.icon(
-        onPressed: onRetry,
-        icon: const Icon(Icons.refresh),
-        label: const Text('图片加载失败'),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: TextButton.icon(
+          onPressed: onRetry,
+          icon: const Icon(Icons.refresh),
+          label: Text(
+            '图片加载失败\n$message',
+            textAlign: TextAlign.center,
+            maxLines: 4,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
       ),
     );
   }

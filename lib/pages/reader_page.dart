@@ -687,7 +687,6 @@ class _ReaderPageState extends State<ReaderPage> {
                             controller: _scrollController,
                             observerController: _observerController,
                             onPageObserved: _handleObservedPageIndex,
-                            onRetry: _reloadChapter,
                             onSizeResolved: _handleImageSizeResolved,
                           ),
                         );
@@ -851,7 +850,6 @@ class _ReaderImageList extends StatelessWidget {
   final ScrollController controller;
   final ListObserverController observerController;
   final ValueChanged<int> onPageObserved;
-  final VoidCallback onRetry;
   final void Function(int index, Size size) onSizeResolved;
 
   const _ReaderImageList({
@@ -863,7 +861,6 @@ class _ReaderImageList extends StatelessWidget {
     required this.controller,
     required this.observerController,
     required this.onPageObserved,
-    required this.onRetry,
     required this.onSizeResolved,
   });
 
@@ -917,7 +914,6 @@ class _ReaderImageList extends StatelessWidget {
                   pageCount: pages.length,
                   displaySize: Size(width, displayHeight),
                   isSizeResolved: cached.isCached,
-                  onRetry: onRetry,
                   onSizeResolved: (size) => onSizeResolved(index, size),
                 ),
               ),
