@@ -4,6 +4,7 @@ import 'dart:ui';
 import '../models/comic.dart';
 import '../models/reader_snapshot.dart';
 import '../providers/provider_registry.dart';
+import '../services/reader_snapshot_cache_service.dart';
 import 'image_size_cache_store.dart';
 
 typedef ReaderChapterSnapshotLoader =
@@ -49,6 +50,7 @@ class ReaderSessionController {
   Future<ReaderChapterData> loadChapter(
     int index, {
     bool markHistoryLoading = true,
+    bool forceRefresh = false,
   }) async {
     if (markHistoryLoading) {
       onLoadStarted?.call();
@@ -59,9 +61,21 @@ class ReaderSessionController {
 
     final chapter = chapters[index];
     final loader = snapshotLoader;
-    final snapshot = loader != null
+    var snapshot = !forceRefresh && loader == null
+        ? await ReaderSnapshotCacheService.instance.read(
+            providerId: providerId,
+            comicId: comic.id,
+            chapterId: chapter.id,
+          )
+        : null;
+    snapshot ??= loader != null
         ? await loader(comic: comic, chapter: chapter, chapters: chapters)
         : await _loadProviderChapterSnapshot(chapter);
+    if (loader == null) {
+      unawaited(
+        ReaderSnapshotCacheService.instance.write(snapshot).catchError((_) {}),
+      );
+    }
     final pageSizeKeys = buildPageSizeKeys(snapshot);
     final persistedSizes = await ImageSizeCacheStore(
       sourceTag: providerId,

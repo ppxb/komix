@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../models/comic.dart';
 import '../providers/provider_registry.dart';
+import '../services/comic_detail_cache_service.dart';
 import '../services/download_service.dart';
 import '../services/favorite_service.dart';
 import '../services/reading_progress_service.dart';
@@ -46,7 +47,20 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
     unawaited(_loadFavoriteStatus());
   }
 
-  Future<_ComicDetailData> _loadDetail() async {
+  Future<_ComicDetailData> _loadDetail({bool forceRefresh = false}) async {
+    if (!forceRefresh) {
+      final cached = await ComicDetailCacheService.instance.read(
+        widget.providerId,
+        widget.initialComic.id,
+      );
+      if (cached != null) {
+        return _ComicDetailData(
+          comic: cached.comic,
+          chapters: cached.chapters,
+        );
+      }
+    }
+
     final provider = ProviderRegistry().getProvider(widget.providerId);
     if (provider == null) {
       throw StateError('未找到数据源: ${widget.providerId}');
@@ -57,14 +71,23 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
       provider.getChapters(widget.initialComic.id),
     ]);
 
-    return _ComicDetailData(
+    final data = _ComicDetailData(
       comic: results[0] as Comic,
       chapters: results[1] as List<Chapter>,
     );
+    unawaited(
+      ComicDetailCacheService.instance.write(
+        providerId: widget.providerId,
+        comicId: widget.initialComic.id,
+        comic: data.comic,
+        chapters: data.chapters,
+      ).catchError((_) {}),
+    );
+    return data;
   }
 
   Future<void> _refreshDetail() {
-    final future = _loadDetail();
+    final future = _loadDetail(forceRefresh: true);
     setState(() {
       _detailFuture = future;
       _progressFuture = _loadProgress();

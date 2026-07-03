@@ -14,6 +14,8 @@ const _jmProviderId = 'bf99008d-010b-4f17-ac7c-61a9b57dc3d9';
 class ProviderImageCache {
   const ProviderImageCache._();
 
+  static final Map<String, Future<String>> _inFlightCacheRequests = {};
+
   static Future<String> getCachePicture({
     required String providerId,
     required String comicId,
@@ -42,18 +44,60 @@ class ProviderImageCache {
       throw Exception('404');
     }
 
+    final requestKey = _inFlightKey(
+      providerId: resolvedProviderId,
+      comicId: comicId,
+      chapterId: chapterId,
+      storedName: storedName,
+      pictureType: pictureType,
+    );
+    final inFlight = _inFlightCacheRequests[requestKey];
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final future = _getCachePictureInternal(
+      providerId: resolvedProviderId,
+      comicId: comicId,
+      chapterId: chapterId,
+      url: url,
+      storedName: storedName,
+      pictureType: pictureType,
+      extern: extern,
+      cancelSignal: cancelSignal,
+    );
+    _inFlightCacheRequests[requestKey] = future;
+    try {
+      return await future;
+    } finally {
+      if (_inFlightCacheRequests[requestKey] == future) {
+        _inFlightCacheRequests.remove(requestKey);
+      }
+    }
+  }
+
+  static Future<String> _getCachePictureInternal({
+    required String providerId,
+    required String comicId,
+    required String chapterId,
+    required String url,
+    required String storedName,
+    required PictureType pictureType,
+    required Map<String, dynamic> extern,
+    Future<void>? cancelSignal,
+  }) async {
     final cachePath = await getCachePath();
     final downloadPath = await getDownloadPath();
     final cacheFilePath = _buildStoredFilePath(
       cachePath,
-      resolvedProviderId,
+      providerId,
       storedName,
       comicId,
       pictureType == PictureType.cover ? '' : chapterId,
     );
     final downloadFilePath = _buildStoredFilePath(
       downloadPath,
-      resolvedProviderId,
+      providerId,
       storedName,
       comicId,
       pictureType == PictureType.cover ? '' : chapterId,
@@ -80,7 +124,7 @@ class ProviderImageCache {
     );
 
     if (_needsJmDecode(
-      providerId: resolvedProviderId,
+      providerId: providerId,
       pictureType: pictureType,
       extern: extern,
     )) {
@@ -176,6 +220,22 @@ String _buildStoredFilePath(
   }
   segments.add(_sanitizeStoredPath(storedName));
   return p.joinAll(segments);
+}
+
+String _inFlightKey({
+  required String providerId,
+  required String comicId,
+  required String chapterId,
+  required String storedName,
+  required PictureType pictureType,
+}) {
+  return [
+    providerId.trim(),
+    comicId.trim(),
+    pictureType.name,
+    chapterId.trim(),
+    storedName.trim(),
+  ].join('|');
 }
 
 String _storedFileName({required String path, required String url}) {

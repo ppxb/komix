@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/provider_registry.dart';
 import '../downloads_page.dart';
+import '../system_settings_page.dart';
 
 /// 更多 Tab - 设置和其他功能
 class MoreTab extends StatelessWidget {
@@ -76,6 +77,19 @@ class MoreTab extends StatelessWidget {
                 subtitle: '主题、字体等',
                 onTap: () {
                   // TODO: 导航到外观设置
+                },
+              ),
+              _buildListTile(
+                context,
+                icon: Icons.settings_outlined,
+                title: '系统设置',
+                subtitle: '缓存、存储等',
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (context) => const SystemSettingsPage(),
+                    ),
+                  );
                 },
               ),
               _buildListTile(

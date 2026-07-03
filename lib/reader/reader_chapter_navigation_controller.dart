@@ -61,7 +61,10 @@ class ReaderChapterNavigationController {
     resetViewerTransform();
     final currentIndex = chapterIndex();
     sessionController.removePrefetch(currentIndex);
-    final future = sessionController.loadChapter(currentIndex);
+    final future = sessionController.loadChapter(
+      currentIndex,
+      forceRefresh: true,
+    );
     setChapterFuture(future);
     return future.then<void>((_) {}, onError: (_) {});
   }
