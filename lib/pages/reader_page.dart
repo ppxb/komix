@@ -82,9 +82,11 @@ class _ReaderPageState extends State<ReaderPage> {
   Timer? _progressSaveTimer;
   Timer? _pageCorrectionTimer;
   Timer? _autoReadTimer;
+  Timer? _einkDelayTimer;
   int? _autoReadIntervalMs;
   bool _isSeeking = false;
   bool _isMenuVisible = false;
+  bool _showEinkMask = false;
   int _pageIndex = 0;
   int _initialPageIndex = 0;
   bool _shouldRestoreInitialPage = false;
@@ -142,6 +144,7 @@ class _ReaderPageState extends State<ReaderPage> {
     _progressSaveTimer?.cancel();
     _pageCorrectionTimer?.cancel();
     _autoReadTimer?.cancel();
+    _einkDelayTimer?.cancel();
     unawaited(_saveProgressNow());
     SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.manual,
@@ -219,6 +222,35 @@ class _ReaderPageState extends State<ReaderPage> {
     _autoReadTimer = Timer.periodic(Duration(milliseconds: intervalMsInt), (_) {
       if (!mounted || _isMenuVisible || _isSeeking) return;
       _actionController.onAutoReadTick();
+    });
+  }
+
+  void _hideEinkMask() {
+    _einkDelayTimer?.cancel();
+    _einkDelayTimer = null;
+    if (_showEinkMask && mounted) {
+      setState(() {
+        _showEinkMask = false;
+      });
+    }
+  }
+
+  void _triggerEinkDelay(ReadSettingState readSetting) {
+    if (isColumnReadMode(readSetting.readMode) || !readSetting.einkOptimization) {
+      _hideEinkMask();
+      return;
+    }
+
+    final delayMs = readSetting.einkDelayMs.clamp(50, 500).toInt();
+    _einkDelayTimer?.cancel();
+    setState(() {
+      _showEinkMask = true;
+    });
+    _einkDelayTimer = Timer(Duration(milliseconds: delayMs), () {
+      if (!mounted) return;
+      setState(() {
+        _showEinkMask = false;
+      });
     });
   }
 
@@ -447,6 +479,7 @@ class _ReaderPageState extends State<ReaderPage> {
     if (!isColumnReadMode(readSetting.readMode)) {
       if (!_pageController.hasClients) return;
       _pageController.jumpToPage(targetPage);
+      _triggerEinkDelay(readSetting);
       return;
     }
 
@@ -683,6 +716,7 @@ class _ReaderPageState extends State<ReaderPage> {
 
     _progressSaveTimer?.cancel();
     _stopAutoRead();
+    _hideEinkMask();
     unawaited(_saveProgressNow());
     _pageCorrectionTimer?.cancel();
     _historyManager.markLoading();
@@ -773,6 +807,7 @@ class _ReaderPageState extends State<ReaderPage> {
     }
     _readerCubit.updatePageIndex(safePageIndex);
     _scheduleProgressSave();
+    _triggerEinkDelay(context.read<GlobalSettingCubit>().state.readSetting);
 
     if (_isMenuVisible) {
       _setMenuVisible(false);
@@ -782,6 +817,7 @@ class _ReaderPageState extends State<ReaderPage> {
   void _handleReaderLayoutChanged() {
     _progressSaveTimer?.cancel();
     _pageCorrectionTimer?.cancel();
+    _hideEinkMask();
     setState(() {
       _pageIndex = 0;
       _initialPageIndex = 0;
@@ -815,6 +851,14 @@ class _ReaderPageState extends State<ReaderPage> {
     final backgroundColor = readSetting.resolveReaderBackgroundColor(
       Theme.of(context).brightness,
     );
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final filterOpacityPercent = readSetting.readFilterOpacityPercent
+        .clamp(0, 100)
+        .toDouble();
+    final enableReaderFilter =
+        isDarkMode &&
+        readSetting.readFilterEnabled &&
+        filterOpacityPercent > 0;
     final effectiveDoublePageEnabled = _effectiveDoublePageEnabled(
       readSetting,
       buildContext: context,
@@ -979,6 +1023,22 @@ class _ReaderPageState extends State<ReaderPage> {
                   ),
                 ),
               ),
+              if (enableReaderFilter)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: ColoredBox(
+                      color: Colors.black.withValues(
+                        alpha: filterOpacityPercent / 100,
+                      ),
+                    ),
+                  ),
+                ),
+              if (_showEinkMask)
+                const Positioned.fill(
+                  child: IgnorePointer(
+                    child: ColoredBox(color: Colors.white),
+                  ),
+                ),
               if (_chapterPages.isNotEmpty)
                 ReaderPageInfoOverlay(
                   totalPageCount: _chapterPages.length,

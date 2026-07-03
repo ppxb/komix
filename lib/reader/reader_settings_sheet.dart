@@ -47,6 +47,8 @@ class _ReaderSettingsSheet extends StatelessWidget {
               const SizedBox(height: 22),
               const _BackgroundSection(),
               const SizedBox(height: 22),
+              const _ReadExperienceSection(),
+              const SizedBox(height: 22),
               _LayoutSection(onLayoutChanged: onLayoutChanged),
               const SizedBox(height: 22),
               const _AutoScrollSection(),
@@ -293,6 +295,86 @@ class _LayoutSection extends StatelessWidget {
                 );
               },
               onChangeEnd: (_) => onLayoutChanged(),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReadExperienceSection extends StatelessWidget {
+  const _ReadExperienceSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final setting = context.watch<GlobalSettingCubit>().state.readSetting;
+    final cubit = context.read<GlobalSettingCubit>();
+
+    return _SettingsSection(
+      title: '阅读体验',
+      child: Column(
+        children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('关闭翻页动画'),
+            subtitle: const Text('整页翻页立即切换'),
+            value: setting.noAnimation,
+            onChanged: (value) {
+              cubit.updateReadSetting(
+                (current) => current.copyWith(noAnimation: value),
+              );
+            },
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('阅读滤镜'),
+            subtitle: const Text('仅在深色模式下降低画面亮度'),
+            value: setting.readFilterEnabled,
+            onChanged: (value) {
+              cubit.updateReadSetting(
+                (current) => current.copyWith(readFilterEnabled: value),
+              );
+            },
+          ),
+          if (setting.readFilterEnabled)
+            _SliderRow(
+              label: '滤镜',
+              value: setting.readFilterOpacityPercent.clamp(0, 100).toInt(),
+              min: 0,
+              max: 100,
+              divisions: 100,
+              suffix: '%',
+              onChanged: (value) {
+                cubit.updateReadSetting(
+                  (current) =>
+                      current.copyWith(readFilterOpacityPercent: value),
+                );
+              },
+            ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('墨水屏优化'),
+            subtitle: const Text('横向翻页后先白屏再显示图片'),
+            value: setting.einkOptimization,
+            onChanged: (value) {
+              cubit.updateReadSetting(
+                (current) => current.copyWith(einkOptimization: value),
+              );
+            },
+          ),
+          if (setting.einkOptimization)
+            _SliderRow(
+              label: '白屏',
+              value: setting.einkDelayMs.clamp(50, 500).toInt(),
+              min: 50,
+              max: 500,
+              divisions: 45,
+              suffix: 'ms',
+              onChanged: (value) {
+                cubit.updateReadSetting(
+                  (current) => current.copyWith(einkDelayMs: value),
+                );
+              },
             ),
         ],
       ),
