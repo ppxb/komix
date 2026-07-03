@@ -1,9 +1,13 @@
+import 'dart:async';
+import 'dart:ui';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/comic.dart';
 import '../providers/provider_registry.dart';
+import '../services/reading_progress_service.dart';
 
 const _readerSystemOverlayStyle = SystemUiOverlayStyle(
   statusBarColor: Colors.black,
@@ -18,6 +22,7 @@ class ReaderPage extends StatefulWidget {
   final Comic comic;
   final List<Chapter> chapters;
   final int initialChapterIndex;
+  final double initialScrollProgress;
 
   const ReaderPage({
     super.key,
@@ -25,6 +30,7 @@ class ReaderPage extends StatefulWidget {
     required this.comic,
     required this.chapters,
     required this.initialChapterIndex,
+    this.initialScrollProgress = 0,
   });
 
   @override
@@ -35,7 +41,13 @@ class _ReaderPageState extends State<ReaderPage> {
   late int _chapterIndex;
   late Future<_ReaderChapterData> _chapterFuture;
   final ScrollController _scrollController = ScrollController();
+  Timer? _progressSaveTimer;
+  bool _isSeeking = false;
   bool _isMenuVisible = false;
+  double _scrollProgress = 0;
+  bool _shouldRestoreInitialProgress = false;
+  bool _isRestoreScheduled = false;
+  int _restoreAttempts = 0;
 
   @override
   void initState() {
@@ -45,15 +57,21 @@ class _ReaderPageState extends State<ReaderPage> {
         ? 0
         : widget.initialChapterIndex.clamp(0, lastIndex).toInt();
     _chapterFuture = _loadChapter(_chapterIndex);
+    _scrollProgress = widget.initialScrollProgress.clamp(0.0, 1.0).toDouble();
+    _shouldRestoreInitialProgress = _scrollProgress > 0;
+    _scrollController.addListener(_handleScrollChanged);
     _applySystemUiVisibility(false);
   }
 
   @override
   void dispose() {
+    _progressSaveTimer?.cancel();
+    unawaited(_saveProgressNow());
     SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.manual,
       overlays: [SystemUiOverlay.top, SystemUiOverlay.bottom],
     );
+    _scrollController.removeListener(_handleScrollChanged);
     _scrollController.dispose();
     super.dispose();
   }
@@ -87,6 +105,19 @@ class _ReaderPageState extends State<ReaderPage> {
     _setMenuVisible(!_isMenuVisible);
   }
 
+  void _handleScrollChanged() {
+    if (_isSeeking) return;
+
+    final progress = _currentScrollProgress();
+    if ((progress - _scrollProgress).abs() > 0.002 && mounted) {
+      setState(() {
+        _scrollProgress = progress;
+      });
+    }
+
+    _scheduleProgressSave();
+  }
+
   bool _handleReaderScrollNotification(ScrollNotification notification) {
     if (notification.metrics.axis != Axis.vertical || !_isMenuVisible) {
       return false;
@@ -98,6 +129,121 @@ class _ReaderPageState extends State<ReaderPage> {
     }
 
     return false;
+  }
+
+  double _currentScrollProgress() {
+    if (!_scrollController.hasClients) return _scrollProgress;
+    final position = _scrollController.position;
+    if (position.maxScrollExtent <= 0) return 0;
+    return (position.pixels / position.maxScrollExtent)
+        .clamp(0.0, 1.0)
+        .toDouble();
+  }
+
+  void _scheduleProgressSave() {
+    _progressSaveTimer?.cancel();
+    _progressSaveTimer = Timer(const Duration(milliseconds: 700), () {
+      if (!mounted) return;
+      unawaited(_saveProgressNow());
+    });
+  }
+
+  Future<void> _saveProgressNow() {
+    if (widget.chapters.isEmpty) return Future<void>.value();
+
+    final chapter = widget.chapters[_chapterIndex];
+    return ReadingProgressService.instance.saveProgress(
+      ReadingProgress(
+        providerId: widget.providerId,
+        comicId: widget.comic.id,
+        comicTitle: widget.comic.title,
+        coverUrl: widget.comic.coverUrl,
+        chapterId: chapter.id,
+        chapterTitle: _chapterTitle(_chapterIndex),
+        chapterIndex: _chapterIndex,
+        chapterCount: widget.chapters.length,
+        scrollProgress: _currentScrollProgress(),
+        updatedAt: DateTime.now().toUtc(),
+      ),
+    );
+  }
+
+  void _scheduleInitialProgressRestore() {
+    if (!_shouldRestoreInitialProgress || _isRestoreScheduled) return;
+
+    _isRestoreScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _isRestoreScheduled = false;
+      _restoreInitialProgress();
+    });
+  }
+
+  void _restoreInitialProgress() {
+    if (!mounted || !_shouldRestoreInitialProgress) return;
+    if (!_scrollController.hasClients) {
+      _retryInitialProgressRestore();
+      return;
+    }
+
+    final position = _scrollController.position;
+    if (position.maxScrollExtent <= 0) {
+      _retryInitialProgressRestore();
+      return;
+    }
+
+    _shouldRestoreInitialProgress = false;
+    final offset =
+        position.maxScrollExtent * _scrollProgress.clamp(0.0, 1.0).toDouble();
+    _scrollController.jumpTo(
+      offset
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble(),
+    );
+    _scheduleProgressSave();
+  }
+
+  void _retryInitialProgressRestore() {
+    if (_restoreAttempts >= 8) {
+      _shouldRestoreInitialProgress = false;
+      return;
+    }
+
+    _restoreAttempts += 1;
+    Future<void>.delayed(const Duration(milliseconds: 120), () {
+      if (!mounted) return;
+      _scheduleInitialProgressRestore();
+    });
+  }
+
+  void _handleProgressChangeStart(double value) {
+    _progressSaveTimer?.cancel();
+    _isSeeking = true;
+  }
+
+  void _handleProgressChanged(double value) {
+    setState(() {
+      _scrollProgress = value.clamp(0.0, 1.0).toDouble();
+    });
+  }
+
+  void _handleProgressChangeEnd(double value) {
+    final progress = value.clamp(0.0, 1.0).toDouble();
+    _isSeeking = false;
+
+    if (_scrollController.hasClients) {
+      final position = _scrollController.position;
+      final target = position.maxScrollExtent * progress;
+      _scrollController.jumpTo(
+        target
+            .clamp(position.minScrollExtent, position.maxScrollExtent)
+            .toDouble(),
+      );
+    }
+
+    setState(() {
+      _scrollProgress = progress;
+    });
+    unawaited(_saveProgressNow());
   }
 
   String _chapterTitle(int index) {
@@ -137,14 +283,20 @@ class _ReaderPageState extends State<ReaderPage> {
       return;
     }
 
+    _progressSaveTimer?.cancel();
     setState(() {
       _chapterIndex = index;
       _chapterFuture = _loadChapter(index);
+      _scrollProgress = 0;
+      _shouldRestoreInitialProgress = false;
+      _restoreAttempts = 0;
     });
 
     if (_scrollController.hasClients) {
       _scrollController.jumpTo(0);
     }
+
+    unawaited(_saveProgressNow());
   }
 
   Future<void> _showChapterPicker() async {
@@ -235,6 +387,7 @@ class _ReaderPageState extends State<ReaderPage> {
                         return _ReaderEmptyView(onRetry: _reloadChapter);
                       }
 
+                      _scheduleInitialProgressRestore();
                       return _ReaderImageList(
                         images: data.images,
                         controller: _scrollController,
@@ -247,17 +400,21 @@ class _ReaderPageState extends State<ReaderPage> {
             ),
             _ReaderTopBar(
               title: widget.comic.title,
+              chapterTitle: _chapterTitle(_chapterIndex),
               isVisible: _isMenuVisible,
               onRefresh: _reloadChapter,
             ),
             _ReaderBottomOverlay(
               isVisible: _isMenuVisible,
               child: _ReaderBottomBar(
-                chapterTitle: _chapterTitle(_chapterIndex),
                 chapterIndex: _chapterIndex,
                 chapterCount: widget.chapters.length,
+                progress: _scrollProgress,
                 hasPrevious: hasPrevious,
                 hasNext: hasNext,
+                onProgressChangeStart: _handleProgressChangeStart,
+                onProgressChanged: _handleProgressChanged,
+                onProgressChangeEnd: _handleProgressChangeEnd,
                 onPrevious: () => _goToChapter(_chapterIndex - 1),
                 onChapterPicker: _showChapterPicker,
                 onNext: () => _goToChapter(_chapterIndex + 1),
@@ -272,11 +429,13 @@ class _ReaderPageState extends State<ReaderPage> {
 
 class _ReaderTopBar extends StatelessWidget {
   final String title;
+  final String chapterTitle;
   final bool isVisible;
   final VoidCallback onRefresh;
 
   const _ReaderTopBar({
     required this.title,
+    required this.chapterTitle,
     required this.isVisible,
     required this.onRefresh,
   });
@@ -295,30 +454,50 @@ class _ReaderTopBar extends StatelessWidget {
           duration: const Duration(milliseconds: 240),
           curve: Curves.easeOutCubic,
           offset: isVisible ? Offset.zero : const Offset(0, -1),
-          child: Material(
-            color: colorScheme.surface,
-            elevation: isVisible ? 2 : 0,
-            child: SafeArea(
-              bottom: false,
-              child: SizedBox(
-                height: kToolbarHeight,
-                child: Row(
-                  children: [
-                    const BackButton(),
-                    Expanded(
-                      child: Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
+          child: ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: Material(
+                color: colorScheme.surface.withValues(alpha: 0.78),
+                elevation: isVisible ? 2 : 0,
+                child: SafeArea(
+                  bottom: false,
+                  child: SizedBox(
+                    height: 64,
+                    child: Row(
+                      children: [
+                        const BackButton(),
+                        Expanded(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                              Text(
+                                chapterTitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: '刷新',
+                          onPressed: onRefresh,
+                          icon: const Icon(Icons.refresh),
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      tooltip: '刷新',
-                      onPressed: onRefresh,
-                      icon: const Icon(Icons.refresh),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -422,21 +601,27 @@ class _ReaderImage extends StatelessWidget {
 }
 
 class _ReaderBottomBar extends StatelessWidget {
-  final String chapterTitle;
   final int chapterIndex;
   final int chapterCount;
+  final double progress;
   final bool hasPrevious;
   final bool hasNext;
+  final ValueChanged<double> onProgressChangeStart;
+  final ValueChanged<double> onProgressChanged;
+  final ValueChanged<double> onProgressChangeEnd;
   final VoidCallback onPrevious;
   final VoidCallback onChapterPicker;
   final VoidCallback onNext;
 
   const _ReaderBottomBar({
-    required this.chapterTitle,
     required this.chapterIndex,
     required this.chapterCount,
+    required this.progress,
     required this.hasPrevious,
     required this.hasNext,
+    required this.onProgressChangeStart,
+    required this.onProgressChanged,
+    required this.onProgressChangeEnd,
     required this.onPrevious,
     required this.onChapterPicker,
     required this.onNext,
@@ -446,58 +631,95 @@ class _ReaderBottomBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
-    return Material(
-      color: colorScheme.surface,
-      elevation: 3,
-      child: SizedBox(
-        height: 52,
-        child: Row(
-          children: [
-            _ReaderBottomIconButton(
-              tooltip: '上一章',
-              onPressed: hasPrevious ? onPrevious : null,
-              icon: Icons.skip_previous,
-            ),
-            Expanded(
-              child: InkWell(
-                onTap: chapterCount > 0 ? onChapterPicker : null,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.center,
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Material(
+          color: colorScheme.surface.withValues(alpha: 0.78),
+          elevation: 3,
+          child: SizedBox(
+            height: 78,
+            child: Column(
+              children: [
+                SizedBox(
+                  height: 30,
+                  child: Row(
                     children: [
-                      Text(
-                        chapterTitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.labelLarge,
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 2,
+                            thumbShape: const RoundSliderThumbShape(
+                              enabledThumbRadius: 5,
+                            ),
+                            overlayShape: const RoundSliderOverlayShape(
+                              overlayRadius: 12,
+                            ),
+                          ),
+                          child: Slider(
+                            value: progress.clamp(0.0, 1.0).toDouble(),
+                            onChangeStart: onProgressChangeStart,
+                            onChanged: onProgressChanged,
+                            onChangeEnd: onProgressChangeEnd,
+                          ),
+                        ),
                       ),
-                      Text(
-                        chapterCount == 0
-                            ? '暂无章节'
-                            : '${chapterIndex + 1} / $chapterCount',
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
+                      SizedBox(
+                        width: 48,
+                        child: Text(
+                          '${(progress * 100).round()}%',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(color: colorScheme.onSurfaceVariant),
                         ),
                       ),
                     ],
                   ),
                 ),
-              ),
+                SizedBox(
+                  height: 48,
+                  child: Row(
+                    children: [
+                      _ReaderBottomIconButton(
+                        tooltip: '上一章',
+                        onPressed: hasPrevious ? onPrevious : null,
+                        icon: Icons.skip_previous,
+                      ),
+                      Expanded(
+                        child: InkWell(
+                          onTap: chapterCount > 0 ? onChapterPicker : null,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            child: Center(
+                              child: Text(
+                                chapterCount == 0
+                                    ? '暂无章节'
+                                    : '${chapterIndex + 1} / $chapterCount',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context).textTheme.labelLarge,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      _ReaderBottomIconButton(
+                        tooltip: '章节列表',
+                        onPressed: chapterCount > 0 ? onChapterPicker : null,
+                        icon: Icons.format_list_bulleted,
+                      ),
+                      _ReaderBottomIconButton(
+                        tooltip: '下一章',
+                        onPressed: hasNext ? onNext : null,
+                        icon: Icons.skip_next,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            _ReaderBottomIconButton(
-              tooltip: '章节列表',
-              onPressed: chapterCount > 0 ? onChapterPicker : null,
-              icon: Icons.format_list_bulleted,
-            ),
-            _ReaderBottomIconButton(
-              tooltip: '下一章',
-              onPressed: hasNext ? onNext : null,
-              icon: Icons.skip_next,
-            ),
-          ],
+          ),
         ),
       ),
     );

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../models/comic.dart';
 import '../providers/provider_registry.dart';
+import '../services/reading_progress_service.dart';
 import 'reader_page.dart';
 
 class ComicDetailPage extends StatefulWidget {
@@ -21,6 +22,7 @@ class ComicDetailPage extends StatefulWidget {
 
 class _ComicDetailPageState extends State<ComicDetailPage> {
   late Future<_ComicDetailData> _detailFuture;
+  late Future<ReadingProgress?> _progressFuture;
   final GlobalKey<RefreshIndicatorState> _refreshIndicatorKey =
       GlobalKey<RefreshIndicatorState>();
   bool _isAppBarOpaque = false;
@@ -33,6 +35,7 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
   void initState() {
     super.initState();
     _detailFuture = _loadDetail();
+    _progressFuture = _loadProgress();
   }
 
   Future<_ComicDetailData> _loadDetail() async {
@@ -56,8 +59,16 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
     final future = _loadDetail();
     setState(() {
       _detailFuture = future;
+      _progressFuture = _loadProgress();
     });
     return future.then<void>((_) {}, onError: (_) {});
+  }
+
+  Future<ReadingProgress?> _loadProgress() {
+    return ReadingProgressService.instance.getProgress(
+      widget.providerId,
+      widget.initialComic.id,
+    );
   }
 
   void _showRefreshIndicator() {
@@ -75,7 +86,12 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  void _openReader(Comic comic, List<Chapter> chapters, int chapterIndex) {
+  void _openReader(
+    Comic comic,
+    List<Chapter> chapters,
+    int chapterIndex, {
+    double initialScrollProgress = 0,
+  }) {
     if (chapters.isEmpty) return;
 
     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
@@ -98,12 +114,16 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
               comic: comic,
               chapters: chapters,
               initialChapterIndex: chapterIndex,
+              initialScrollProgress: initialScrollProgress,
             ),
           );
         },
       ),
     ).then((_) {
       if (!mounted) return;
+      setState(() {
+        _progressFuture = _loadProgress();
+      });
       final theme = Theme.of(context);
       final appBarBackground = _isAppBarOpaque
           ? theme.colorScheme.surface
@@ -120,6 +140,31 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
             : Brightness.dark,
       ));
     });
+  }
+
+  void _openReaderFromProgress(
+    _ComicDetailData data,
+    ReadingProgress? progress,
+  ) {
+    var chapterIndex = 0;
+    var scrollProgress = 0.0;
+
+    if (progress != null && progress.canContinue) {
+      final matchedIndex = data.chapters.indexWhere(
+        (chapter) => chapter.id == progress.chapterId,
+      );
+      chapterIndex = matchedIndex >= 0
+          ? matchedIndex
+          : progress.chapterIndex.clamp(0, data.chapters.length - 1).toInt();
+      scrollProgress = progress.scrollProgress.clamp(0.0, 1.0).toDouble();
+    }
+
+    _openReader(
+      data.comic,
+      data.chapters,
+      chapterIndex,
+      initialScrollProgress: scrollProgress,
+    );
   }
 
   bool _handleScrollNotification(ScrollNotification notification) {
@@ -198,8 +243,9 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
       ),
       floatingActionButton: _StartReadingFab(
         detailFuture: _detailFuture,
+        progressFuture: _progressFuture,
         isExtended: !_isAppBarOpaque,
-        onStartReading: (data) => _openReader(data.comic, data.chapters, 0),
+        onStartReading: _openReaderFromProgress,
       ),
       body: NotificationListener<ScrollNotification>(
         onNotification: _handleScrollNotification,
@@ -249,11 +295,14 @@ enum _DetailMenuAction { refresh, addFavorite }
 
 class _StartReadingFab extends StatelessWidget {
   final Future<_ComicDetailData> detailFuture;
+  final Future<ReadingProgress?> progressFuture;
   final bool isExtended;
-  final ValueChanged<_ComicDetailData> onStartReading;
+  final void Function(_ComicDetailData data, ReadingProgress? progress)
+      onStartReading;
 
   const _StartReadingFab({
     required this.detailFuture,
+    required this.progressFuture,
     required this.isExtended,
     required this.onStartReading,
   });
@@ -269,13 +318,28 @@ class _StartReadingFab extends StatelessWidget {
           return const SizedBox.shrink();
         }
 
-        return FloatingActionButton.extended(
-          heroTag: null,
-          isExtended: isExtended,
-          tooltip: '开始阅读',
-          onPressed: hasChapters ? () => onStartReading(data!) : null,
-          icon: const Icon(Icons.play_arrow),
-          label: const Text('开始'),
+        return FutureBuilder<ReadingProgress?>(
+          future: progressFuture,
+          builder: (context, progressSnapshot) {
+            final progress = progressSnapshot.data;
+            final hasProgress = progress != null && progress.canContinue;
+            final isProgressLoading =
+                progressSnapshot.connectionState == ConnectionState.waiting &&
+                !progressSnapshot.hasData;
+
+            return FloatingActionButton.extended(
+              heroTag: null,
+              isExtended: isExtended,
+              tooltip: hasProgress ? '继续阅读' : '开始阅读',
+              onPressed: hasChapters && !isProgressLoading
+                  ? () => onStartReading(data!, progress)
+                  : null,
+              icon: Icon(
+                hasProgress ? Icons.history_rounded : Icons.play_arrow,
+              ),
+              label: Text(hasProgress ? '继续' : '开始'),
+            );
+          },
         );
       },
     );
