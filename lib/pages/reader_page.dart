@@ -20,6 +20,7 @@ import '../reader/reader_history_manager.dart';
 import '../reader/reader_image_loader.dart';
 import '../reader/reader_image_view.dart';
 import '../reader/reader_layout.dart';
+import '../reader/reader_page_info_overlay.dart';
 import '../reader/reader_keyboard_shortcuts.dart';
 import '../reader/reader_settings_sheet.dart';
 
@@ -814,6 +815,10 @@ class _ReaderPageState extends State<ReaderPage> {
     final backgroundColor = readSetting.resolveReaderBackgroundColor(
       Theme.of(context).brightness,
     );
+    final effectiveDoublePageEnabled = _effectiveDoublePageEnabled(
+      readSetting,
+      buildContext: context,
+    );
 
     return BlocProvider.value(
       value: _readerCubit,
@@ -904,10 +909,7 @@ class _ReaderPageState extends State<ReaderPage> {
                               ),
                             );
                           }
-                          final enableDoublePage = _effectiveDoublePageEnabled(
-                            readSetting,
-                            buildContext: context,
-                          );
+                          final enableDoublePage = effectiveDoublePageEnabled;
                           final slotCount = _slotCountFor(
                             readSetting,
                             buildContext: context,
@@ -977,6 +979,11 @@ class _ReaderPageState extends State<ReaderPage> {
                   ),
                 ),
               ),
+              if (_chapterPages.isNotEmpty)
+                ReaderPageInfoOverlay(
+                  totalPageCount: _chapterPages.length,
+                  enableDoublePage: effectiveDoublePageEnabled,
+                ),
               _ReaderTopBar(
                 title: widget.comic.title,
                 chapterTitle: _chapterTitle(_chapterIndex),

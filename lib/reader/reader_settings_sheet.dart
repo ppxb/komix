@@ -50,6 +50,8 @@ class _ReaderSettingsSheet extends StatelessWidget {
               _LayoutSection(onLayoutChanged: onLayoutChanged),
               const SizedBox(height: 22),
               const _AutoScrollSection(),
+              const SizedBox(height: 22),
+              const _PageInfoSection(),
             ],
           ),
         ),
@@ -354,6 +356,205 @@ class _AutoScrollSection extends StatelessWidget {
               },
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PageInfoSection extends StatelessWidget {
+  const _PageInfoSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final setting = context.watch<GlobalSettingCubit>().state.readSetting;
+    final cubit = context.read<GlobalSettingCubit>();
+    final isTop =
+        setting.pageInfoVerticalPosition == ReaderInfoVerticalPosition.top;
+    final isCentered =
+        setting.pageInfoHorizontalPosition ==
+        ReaderInfoHorizontalPosition.center;
+
+    return _SettingsSection(
+      title: '信息条',
+      child: Column(
+        children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('页数'),
+            value: setting.pageInfoShowPage,
+            onChanged: (value) {
+              cubit.updateReadSetting(
+                (current) => current.copyWith(pageInfoShowPage: value),
+              );
+            },
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('网络状态'),
+            value: setting.pageInfoShowNetwork,
+            onChanged: (value) {
+              cubit.updateReadSetting(
+                (current) => current.copyWith(pageInfoShowNetwork: value),
+              );
+            },
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('电池'),
+            value: setting.pageInfoShowBattery,
+            onChanged: (value) {
+              cubit.updateReadSetting(
+                (current) => current.copyWith(pageInfoShowBattery: value),
+              );
+            },
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('时间'),
+            value: setting.pageInfoShowTime,
+            onChanged: (value) {
+              cubit.updateReadSetting(
+                (current) => current.copyWith(pageInfoShowTime: value),
+              );
+            },
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _ChoicePill(
+                  label: '顶部',
+                  selected: isTop,
+                  onTap: () {
+                    cubit.updateReadSetting(
+                      (current) => current.copyWith(
+                        pageInfoVerticalPosition:
+                            ReaderInfoVerticalPosition.top,
+                      ),
+                    );
+                  },
+                ),
+                _ChoicePill(
+                  label: '底部',
+                  selected: !isTop,
+                  onTap: () {
+                    cubit.updateReadSetting(
+                      (current) => current.copyWith(
+                        pageInfoVerticalPosition:
+                            ReaderInfoVerticalPosition.bottom,
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+          if (isTop)
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('显示在状态栏'),
+              value: setting.pageInfoTopInStatusBar,
+              onChanged: (value) {
+                cubit.updateReadSetting(
+                  (current) =>
+                      current.copyWith(pageInfoTopInStatusBar: value),
+                );
+              },
+            ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _ChoicePill(
+                  label: '左侧',
+                  selected:
+                      setting.pageInfoHorizontalPosition ==
+                      ReaderInfoHorizontalPosition.left,
+                  onTap: () {
+                    cubit.updateReadSetting(
+                      (current) => current.copyWith(
+                        pageInfoHorizontalPosition:
+                            ReaderInfoHorizontalPosition.left,
+                      ),
+                    );
+                  },
+                ),
+                _ChoicePill(
+                  label: '中间',
+                  selected: isCentered,
+                  onTap: () {
+                    cubit.updateReadSetting(
+                      (current) => current.copyWith(
+                        pageInfoHorizontalPosition:
+                            ReaderInfoHorizontalPosition.center,
+                      ),
+                    );
+                  },
+                ),
+                _ChoicePill(
+                  label: '右侧',
+                  selected:
+                      setting.pageInfoHorizontalPosition ==
+                      ReaderInfoHorizontalPosition.right,
+                  onTap: () {
+                    cubit.updateReadSetting(
+                      (current) => current.copyWith(
+                        pageInfoHorizontalPosition:
+                            ReaderInfoHorizontalPosition.right,
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+          if (!isCentered)
+            _SliderRow(
+              label: '边距',
+              value: setting.pageInfoEdgePadding.clamp(0, 48).toInt(),
+              min: 0,
+              max: 48,
+              divisions: 48,
+              suffix: 'px',
+              onChanged: (value) {
+                cubit.updateReadSetting(
+                  (current) => current.copyWith(pageInfoEdgePadding: value),
+                );
+              },
+            ),
+          _SliderRow(
+            label: '透明度',
+            value: setting.pageInfoOpacityPercent.clamp(20, 100).toInt(),
+            min: 20,
+            max: 100,
+            divisions: 80,
+            suffix: '%',
+            onChanged: (value) {
+              cubit.updateReadSetting(
+                (current) => current.copyWith(pageInfoOpacityPercent: value),
+              );
+            },
+          ),
+          _SliderRow(
+            label: '字号',
+            value: setting.pageInfoFontSize.clamp(10, 20).toInt(),
+            min: 10,
+            max: 20,
+            divisions: 10,
+            suffix: 'px',
+            onChanged: (value) {
+              cubit.updateReadSetting(
+                (current) => current.copyWith(pageInfoFontSize: value),
+              );
+            },
+          ),
         ],
       ),
     );
