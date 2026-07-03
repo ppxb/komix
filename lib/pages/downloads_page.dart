@@ -1,8 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../models/comic.dart';
 import '../services/download_service.dart';
+import 'reader_page.dart';
 
 class DownloadsPage extends StatefulWidget {
   const DownloadsPage({super.key});
@@ -13,11 +16,13 @@ class DownloadsPage extends StatefulWidget {
 
 class _DownloadsPageState extends State<DownloadsPage> {
   late Future<List<DownloadTaskView>> _tasksFuture;
+  late Future<List<DownloadedComic>> _downloadedFuture;
 
   @override
   void initState() {
     super.initState();
     _tasksFuture = _loadTasks();
+    _downloadedFuture = _loadDownloaded();
     DownloadService.instance.revision.addListener(_handleDownloadsChanged);
   }
 
@@ -31,73 +36,317 @@ class _DownloadsPageState extends State<DownloadsPage> {
     return DownloadService.instance.getTasks();
   }
 
-  Future<void> _refreshTasks() {
-    final future = _loadTasks();
+  Future<List<DownloadedComic>> _loadDownloaded() {
+    return DownloadService.instance.getDownloadedComics();
+  }
+
+  Future<void> _refreshAll() {
+    final tasksFuture = _loadTasks();
+    final downloadedFuture = _loadDownloaded();
     setState(() {
-      _tasksFuture = future;
+      _tasksFuture = tasksFuture;
+      _downloadedFuture = downloadedFuture;
     });
-    return future.then<void>((_) {}, onError: (_) {});
+    return Future.wait<Object>([
+      tasksFuture,
+      downloadedFuture,
+    ]).then<void>((_) {}, onError: (_) {});
   }
 
   void _handleDownloadsChanged() {
     if (!mounted) return;
-    unawaited(_refreshTasks());
+    unawaited(_refreshAll());
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('下载管理')),
-      body: FutureBuilder<List<DownloadTaskView>>(
-        future: _tasksFuture,
-        builder: (context, snapshot) {
-          final items = snapshot.data ?? const <DownloadTaskView>[];
+  Future<void> _handleTaskAction(
+    _DownloadTaskAction action,
+    DownloadTaskView task,
+  ) async {
+    switch (action) {
+      case _DownloadTaskAction.cancel:
+        await DownloadService.instance.cancelTask(task.id);
+        _showMessage('已请求取消');
+        return;
+      case _DownloadTaskAction.retry:
+        await DownloadService.instance.retryTask(task.id);
+        _showMessage('已重新加入队列');
+        return;
+      case _DownloadTaskAction.remove:
+        await DownloadService.instance.removeTask(task.id);
+        _showMessage('已移除任务');
+        return;
+    }
+  }
 
-          if (snapshot.connectionState == ConnectionState.waiting &&
-              items.isEmpty) {
-            return const Center(child: CircularProgressIndicator());
-          }
+  Future<void> _openDownloaded(DownloadedComic downloaded) async {
+    if (downloaded.chapters.isEmpty) {
+      _showMessage('暂无本地章节');
+      return;
+    }
 
-          if (snapshot.hasError && items.isEmpty) {
-            return _DownloadMessage(
-              icon: Icons.error_outline,
-              text: snapshot.error.toString(),
-            );
-          }
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.black,
+        systemNavigationBarColor: Colors.black,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+        systemNavigationBarIconBrightness: Brightness.light,
+      ),
+    );
 
-          if (items.isEmpty) {
-            return const _DownloadMessage(
-              icon: Icons.download_outlined,
-              text: '暂无下载任务',
-            );
-          }
-
-          return RefreshIndicator.adaptive(
-            onRefresh: _refreshTasks,
-            child: ListView.separated(
-              physics: const AlwaysScrollableScrollPhysics(),
-              itemCount: items.length,
-              separatorBuilder: (context, index) => const Divider(height: 1),
-              itemBuilder: (context, index) {
-                final item = items[index];
-                return ListTile(
-                  leading: _DownloadStatusIcon(item: item),
-                  title: Text(
-                    item.comicName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(
-                    item.status.isEmpty ? '等待下载' : item.status,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                );
-              },
+    await Navigator.of(context).push(
+      PageRouteBuilder(
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return ColoredBox(
+            color: Colors.black,
+            child: ReaderPage(
+              providerId: downloaded.providerId,
+              comic: downloaded.toComic(),
+              chapters: downloaded.chapters,
+              initialChapterIndex: 0,
+              snapshotLoader:
+                  ({
+                    required Comic comic,
+                    required Chapter chapter,
+                    required List<Chapter> chapters,
+                  }) {
+                    return DownloadService.instance
+                        .getDownloadedChapterSnapshot(
+                          download: downloaded,
+                          chapter: chapter,
+                        );
+                  },
             ),
           );
         },
       ),
+    );
+
+    if (!mounted) return;
+    final theme = Theme.of(context);
+    SystemChrome.setSystemUIOverlayStyle(
+      SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: theme.brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
+        statusBarBrightness: theme.brightness,
+        systemNavigationBarColor: theme.colorScheme.surface,
+        systemNavigationBarIconBrightness: theme.brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
+      ),
+    );
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('下载管理'),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: '任务'),
+              Tab(text: '已下载'),
+            ],
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            _DownloadTaskList(
+              future: _tasksFuture,
+              onRefresh: _refreshAll,
+              onAction: _handleTaskAction,
+            ),
+            _DownloadedList(
+              future: _downloadedFuture,
+              onRefresh: _refreshAll,
+              onOpen: _openDownloaded,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+enum _DownloadTaskAction { cancel, retry, remove }
+
+class _DownloadTaskList extends StatelessWidget {
+  final Future<List<DownloadTaskView>> future;
+  final RefreshCallback onRefresh;
+  final Future<void> Function(_DownloadTaskAction action, DownloadTaskView task)
+  onAction;
+
+  const _DownloadTaskList({
+    required this.future,
+    required this.onRefresh,
+    required this.onAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<DownloadTaskView>>(
+      future: future,
+      builder: (context, snapshot) {
+        final items = snapshot.data ?? const <DownloadTaskView>[];
+
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            items.isEmpty) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError && items.isEmpty) {
+          return _DownloadMessage(
+            icon: Icons.error_outline,
+            text: snapshot.error.toString(),
+          );
+        }
+
+        if (items.isEmpty) {
+          return const _DownloadMessage(
+            icon: Icons.download_outlined,
+            text: '暂无下载任务',
+          );
+        }
+
+        return RefreshIndicator.adaptive(
+          onRefresh: onRefresh,
+          child: ListView.separated(
+            physics: const AlwaysScrollableScrollPhysics(),
+            itemCount: items.length,
+            separatorBuilder: (context, index) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final item = items[index];
+              return ListTile(
+                leading: _DownloadStatusIcon(item: item),
+                title: Text(
+                  item.comicName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  item.status.isEmpty ? '等待下载' : item.status,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: PopupMenuButton<_DownloadTaskAction>(
+                  onSelected: (action) => unawaited(onAction(action, item)),
+                  itemBuilder: (context) {
+                    return [
+                      if (!item.isCompleted)
+                        const PopupMenuItem(
+                          value: _DownloadTaskAction.cancel,
+                          child: ListTile(
+                            leading: Icon(Icons.close),
+                            title: Text('取消'),
+                          ),
+                        ),
+                      if (item.isFailed || item.isCancelled)
+                        const PopupMenuItem(
+                          value: _DownloadTaskAction.retry,
+                          child: ListTile(
+                            leading: Icon(Icons.refresh),
+                            title: Text('重试'),
+                          ),
+                        ),
+                      if (item.isCompleted)
+                        const PopupMenuItem(
+                          value: _DownloadTaskAction.remove,
+                          child: ListTile(
+                            leading: Icon(Icons.delete_outline),
+                            title: Text('移除记录'),
+                          ),
+                        ),
+                    ];
+                  },
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _DownloadedList extends StatelessWidget {
+  final Future<List<DownloadedComic>> future;
+  final RefreshCallback onRefresh;
+  final Future<void> Function(DownloadedComic downloaded) onOpen;
+
+  const _DownloadedList({
+    required this.future,
+    required this.onRefresh,
+    required this.onOpen,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<DownloadedComic>>(
+      future: future,
+      builder: (context, snapshot) {
+        final items = snapshot.data ?? const <DownloadedComic>[];
+
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            items.isEmpty) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError && items.isEmpty) {
+          return _DownloadMessage(
+            icon: Icons.error_outline,
+            text: snapshot.error.toString(),
+          );
+        }
+
+        if (items.isEmpty) {
+          return const _DownloadMessage(
+            icon: Icons.inventory_2_outlined,
+            text: '暂无已下载漫画',
+          );
+        }
+
+        return RefreshIndicator.adaptive(
+          onRefresh: onRefresh,
+          child: ListView.separated(
+            physics: const AlwaysScrollableScrollPhysics(),
+            itemCount: items.length,
+            separatorBuilder: (context, index) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final item = items[index];
+              final subtitle = item.creator.isEmpty
+                  ? '${item.chapters.length} 章'
+                  : '${item.creator} · ${item.chapters.length} 章';
+              return ListTile(
+                leading: _DownloadedCover(url: item.coverUrl),
+                title: Text(
+                  item.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => unawaited(onOpen(item)),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }
@@ -116,10 +365,17 @@ class _DownloadStatusIcon extends StatelessWidget {
       );
     }
 
-    if (item.isCompleted && item.status.startsWith('下载失败')) {
+    if (item.isFailed) {
       return Icon(
         Icons.error_outline,
         color: Theme.of(context).colorScheme.error,
+      );
+    }
+
+    if (item.isCancelled) {
+      return Icon(
+        Icons.cancel_outlined,
+        color: Theme.of(context).colorScheme.outline,
       );
     }
 
@@ -131,6 +387,40 @@ class _DownloadStatusIcon extends StatelessWidget {
     }
 
     return const Icon(Icons.schedule);
+  }
+}
+
+class _DownloadedCover extends StatelessWidget {
+  final String url;
+
+  const _DownloadedCover({required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    final resolvedUrl = url.trim();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(4),
+      child: SizedBox(
+        width: 44,
+        height: 60,
+        child: resolvedUrl.isEmpty
+            ? _buildPlaceholder(context)
+            : Image.network(
+                resolvedUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  return _buildPlaceholder(context);
+                },
+              ),
+      ),
+    );
+  }
+
+  Widget _buildPlaceholder(BuildContext context) {
+    return ColoredBox(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: const Icon(Icons.broken_image_outlined),
+    );
   }
 }
 

@@ -30,12 +30,20 @@ const _readerSystemOverlayStyle = SystemUiOverlayStyle(
   systemNavigationBarIconBrightness: Brightness.light,
 );
 
+typedef ReaderChapterSnapshotLoader =
+    Future<ReaderChapterSnapshot> Function({
+      required Comic comic,
+      required Chapter chapter,
+      required List<Chapter> chapters,
+    });
+
 class ReaderPage extends StatefulWidget {
   final String providerId;
   final Comic comic;
   final List<Chapter> chapters;
   final int initialChapterIndex;
   final int initialPageIndex;
+  final ReaderChapterSnapshotLoader? snapshotLoader;
 
   const ReaderPage({
     super.key,
@@ -44,6 +52,7 @@ class ReaderPage extends StatefulWidget {
     required this.chapters,
     required this.initialChapterIndex,
     this.initialPageIndex = 0,
+    this.snapshotLoader,
   });
 
   @override
@@ -102,7 +111,8 @@ class _ReaderPageState extends State<ReaderPage> {
       chapterCount: widget.chapters.length,
       getChapterId: () {
         if (widget.chapters.isEmpty) return '';
-        return _chapterSnapshot?.chapter.id ?? widget.chapters[_chapterIndex].id;
+        return _chapterSnapshot?.chapter.id ??
+            widget.chapters[_chapterIndex].id;
       },
       getChapterTitle: () => _chapterTitle(_chapterIndex),
       getChapterIndex: () => _chapterIndex,
@@ -327,10 +337,9 @@ class _ReaderPageState extends State<ReaderPage> {
     if (!_scrollController.hasClients || _chapterPages.isEmpty) return;
 
     final position = _scrollController.position;
-    final target = _estimatedPageOffset(pageIndex).clamp(
-      position.minScrollExtent,
-      position.maxScrollExtent,
-    );
+    final target = _estimatedPageOffset(
+      pageIndex,
+    ).clamp(position.minScrollExtent, position.maxScrollExtent);
     _scrollController.jumpTo(target.toDouble());
 
     if (correctAfterLayout) {
@@ -478,28 +487,37 @@ class _ReaderPageState extends State<ReaderPage> {
       throw StateError('暂无章节');
     }
 
-    final provider = ProviderRegistry().getProvider(widget.providerId);
-    if (provider == null) {
-      throw StateError('未找到数据源: ${widget.providerId}');
-    }
-
     final chapter = widget.chapters[index];
-    final snapshot = await provider.getReaderChapterSnapshot(
-      comic: widget.comic,
-      chapter: chapter,
-      chapters: widget.chapters,
-    );
+    final loader = widget.snapshotLoader;
+    final snapshot = loader != null
+        ? await loader(
+            comic: widget.comic,
+            chapter: chapter,
+            chapters: widget.chapters,
+          )
+        : await _loadProviderChapterSnapshot(chapter);
     final pageSizeKeys = _buildPageSizeKeys(snapshot);
     final persistedSizes = await ImageSizeCacheStore(
       sourceTag: widget.providerId,
       pageKeys: pageSizeKeys,
-    ).readIndexedSizes(
-      pageKeys: pageSizeKeys,
-      count: snapshot.pages.length,
-    );
+    ).readIndexedSizes(pageKeys: pageSizeKeys, count: snapshot.pages.length);
     return _ReaderChapterData(
       snapshot: snapshot,
       persistedSizes: persistedSizes,
+    );
+  }
+
+  Future<ReaderChapterSnapshot> _loadProviderChapterSnapshot(
+    Chapter chapter,
+  ) async {
+    final provider = ProviderRegistry().getProvider(widget.providerId);
+    if (provider == null) {
+      throw StateError('未找到数据源: ${widget.providerId}');
+    }
+    return provider.getReaderChapterSnapshot(
+      comic: widget.comic,
+      chapter: chapter,
+      chapters: widget.chapters,
     );
   }
 
@@ -512,7 +530,9 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _goToChapter(int index) {
-    if (index < 0 || index >= widget.chapters.length || index == _chapterIndex) {
+    if (index < 0 ||
+        index >= widget.chapters.length ||
+        index == _chapterIndex) {
       return;
     }
 
@@ -625,72 +645,72 @@ class _ReaderPageState extends State<ReaderPage> {
                     child: NotificationListener<ScrollNotification>(
                       onNotification: _handleReaderScrollNotification,
                       child: FutureBuilder<_ReaderChapterData>(
-                      key: ValueKey(_chapterIndex),
-                      future: _chapterFuture,
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState ==
-                                ConnectionState.waiting &&
-                            !snapshot.hasData) {
-                          return const Center(
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                            ),
-                          );
-                        }
-
-                        if (snapshot.hasError && !snapshot.hasData) {
-                          return _ReaderErrorView(
-                            message: snapshot.error.toString(),
-                            onRetry: _reloadChapter,
-                          );
-                        }
-
-                        final data = snapshot.requireData;
-                        final chapterSnapshot = data.snapshot;
-                        if (chapterSnapshot.pages.isEmpty) {
-                          return _ReaderEmptyView(onRetry: _reloadChapter);
-                        }
-
-                        final snapshotChanged = _syncChapterSnapshot(
-                          chapterSnapshot,
-                          data.persistedSizes,
-                        );
-                        _historyManager.markLoaded();
-                        if (snapshotChanged) {
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            if (!mounted) return;
-                            _readerCubit.updateTotalSlots(
-                              chapterSnapshot.pages.length,
+                        key: ValueKey(_chapterIndex),
+                        future: _chapterFuture,
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState ==
+                                  ConnectionState.waiting &&
+                              !snapshot.hasData) {
+                            return const Center(
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                              ),
                             );
-                            _readerCubit.updatePageIndex(_pageIndex);
-                            setState(() {});
-                            unawaited(_saveProgressNow());
-                          });
-                        }
-                        final imageSizeCubit = _imageSizeCubit;
-                        if (imageSizeCubit == null) {
-                          return const Center(
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
+                          }
+
+                          if (snapshot.hasError && !snapshot.hasData) {
+                            return _ReaderErrorView(
+                              message: snapshot.error.toString(),
+                              onRetry: _reloadChapter,
+                            );
+                          }
+
+                          final data = snapshot.requireData;
+                          final chapterSnapshot = data.snapshot;
+                          if (chapterSnapshot.pages.isEmpty) {
+                            return _ReaderEmptyView(onRetry: _reloadChapter);
+                          }
+
+                          final snapshotChanged = _syncChapterSnapshot(
+                            chapterSnapshot,
+                            data.persistedSizes,
+                          );
+                          _historyManager.markLoaded();
+                          if (snapshotChanged) {
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              if (!mounted) return;
+                              _readerCubit.updateTotalSlots(
+                                chapterSnapshot.pages.length,
+                              );
+                              _readerCubit.updatePageIndex(_pageIndex);
+                              setState(() {});
+                              unawaited(_saveProgressNow());
+                            });
+                          }
+                          final imageSizeCubit = _imageSizeCubit;
+                          if (imageSizeCubit == null) {
+                            return const Center(
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                              ),
+                            );
+                          }
+                          _scheduleInitialPageRestore();
+                          return BlocProvider.value(
+                            value: imageSizeCubit,
+                            child: _ReaderImageList(
+                              pageKeys: _pageKeys,
+                              providerId: chapterSnapshot.providerId,
+                              comicId: chapterSnapshot.comic.id,
+                              chapterId: chapterSnapshot.chapter.id,
+                              pages: chapterSnapshot.pages,
+                              controller: _scrollController,
+                              observerController: _observerController,
+                              onPageObserved: _handleObservedPageIndex,
+                              onSizeResolved: _handleImageSizeResolved,
                             ),
                           );
-                        }
-                        _scheduleInitialPageRestore();
-                        return BlocProvider.value(
-                          value: imageSizeCubit,
-                          child: _ReaderImageList(
-                            pageKeys: _pageKeys,
-                            providerId: chapterSnapshot.providerId,
-                            comicId: chapterSnapshot.comic.id,
-                            chapterId: chapterSnapshot.chapter.id,
-                            pages: chapterSnapshot.pages,
-                            controller: _scrollController,
-                            observerController: _observerController,
-                            onPageObserved: _handleObservedPageIndex,
-                            onSizeResolved: _handleImageSizeResolved,
-                          ),
-                        );
-                      },
+                        },
                       ),
                     ),
                   ),
@@ -1100,10 +1120,7 @@ class _ReaderEmptyView extends StatelessWidget {
               color: secondaryColor,
             ),
             const SizedBox(height: 16),
-            const Text(
-              '暂无图片',
-              style: TextStyle(color: foregroundColor),
-            ),
+            const Text('暂无图片', style: TextStyle(color: foregroundColor)),
             const SizedBox(height: 16),
             OutlinedButton.icon(
               onPressed: onRetry,
