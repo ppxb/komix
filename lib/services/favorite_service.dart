@@ -6,6 +6,7 @@ import '../main.dart';
 import '../models/comic.dart';
 import '../object_box/model.dart';
 import '../object_box/objectbox.g.dart';
+import 'comic_link_service.dart';
 
 class FavoriteComic {
   final String uniqueKey;
@@ -68,11 +69,7 @@ class FavoriteService {
     final now = DateTime.now().toUtc();
 
     if (existing != null && !existing.deleted) {
-      existing
-        ..deleted = true
-        ..updatedAt = now;
-      objectbox.unifiedFavoriteBox.put(existing);
-      _notifyChanged();
+      await removeFavorite(providerId: providerId, comicId: comic.id);
       return false;
     }
 
@@ -90,10 +87,8 @@ class FavoriteService {
       }),
       creator: jsonEncode(<String, dynamic>{'name': creator}),
       titleMeta: jsonEncode(<Map<String, dynamic>>[
-        if (creator.isNotEmpty) <String, dynamic>{
-          'name': '作者',
-          'value': creator,
-        },
+        if (creator.isNotEmpty)
+          <String, dynamic>{'name': '作者', 'value': creator},
       ]),
       metadata: jsonEncode(<String, dynamic>{
         'tags': comic.tags,
@@ -108,6 +103,7 @@ class FavoriteService {
     );
 
     objectbox.unifiedFavoriteBox.put(entity);
+    ComicLinkService.addComic(key, null, ComicFolderType.favorite);
     _notifyChanged();
     return true;
   }
@@ -116,13 +112,10 @@ class FavoriteService {
     required String providerId,
     required String comicId,
   }) async {
-    final favorite = _findFavorite(_key(providerId, comicId));
-    if (favorite == null || favorite.deleted) return;
-
-    favorite
-      ..deleted = true
-      ..updatedAt = DateTime.now().toUtc();
-    objectbox.unifiedFavoriteBox.put(favorite);
+    ComicLinkService.removeComicFromAll(
+      _key(providerId, comicId),
+      ComicFolderType.favorite,
+    );
     _notifyChanged();
   }
 

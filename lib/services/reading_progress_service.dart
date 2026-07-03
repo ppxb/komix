@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../main.dart';
 import '../object_box/model.dart';
 import '../object_box/objectbox.g.dart';
+import 'comic_link_service.dart';
 
 class ReadingProgress {
   final String providerId;
@@ -73,7 +74,10 @@ class ReadingProgressService {
 
   static final ReadingProgressService instance = ReadingProgressService._();
 
-  Future<ReadingProgress?> getProgress(String providerId, String comicId) async {
+  Future<ReadingProgress?> getProgress(
+    String providerId,
+    String comicId,
+  ) async {
     final query = objectbox.unifiedHistoryBox
         .query(UnifiedComicHistory_.uniqueKey.equals(_key(providerId, comicId)))
         .build();
@@ -89,9 +93,7 @@ class ReadingProgressService {
   Future<void> saveProgress(ReadingProgress progress) async {
     final box = objectbox.unifiedHistoryBox;
     final key = _key(progress.providerId, progress.comicId);
-    final query = box
-        .query(UnifiedComicHistory_.uniqueKey.equals(key))
-        .build();
+    final query = box.query(UnifiedComicHistory_.uniqueKey.equals(key)).build();
 
     try {
       final existing = query.findFirst();
@@ -137,6 +139,7 @@ class ReadingProgressService {
         ..deleted = false;
 
       box.put(entity);
+      ComicLinkService.addComic(key, null, ComicFolderType.history);
     } finally {
       query.close();
     }

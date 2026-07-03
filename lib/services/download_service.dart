@@ -14,6 +14,7 @@ import '../providers/provider_registry.dart';
 import '../type/enum.dart';
 import '../util/foreground_task/data/download_task_json.dart';
 import '../util/get_path.dart';
+import 'comic_link_service.dart';
 import 'provider_image_cache.dart';
 
 class DownloadTaskView {
@@ -310,10 +311,10 @@ class DownloadService {
   }) async {
     if (providerId.trim().isEmpty || comicId.trim().isEmpty) return;
 
-    final existing = _findDownloadedComic(_key(providerId, comicId));
-    if (existing != null) {
-      objectbox.unifiedDownloadBox.remove(existing.id);
-    }
+    ComicLinkService.removeComicFromAll(
+      _key(providerId, comicId),
+      ComicFolderType.download,
+    );
 
     try {
       final targetDir = Directory(
@@ -623,6 +624,7 @@ class DownloadService {
         schemaVersion: 2,
       ),
     );
+    ComicLinkService.addComic(key, null, ComicFolderType.download);
   }
 
   UnifiedComicDownload? _findDownloadedComic(String key) {
