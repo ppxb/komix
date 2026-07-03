@@ -65,6 +65,7 @@ class ReaderPage extends StatefulWidget {
 class _ReaderPageState extends State<ReaderPage> {
   static const _estimatedPageAspectRatio = 1.42;
   static const _scaleLockThreshold = 1.01;
+  static const _chapterEndPageIndex = 0x3fffffff;
 
   late int _chapterIndex;
   late Future<_ReaderChapterData> _chapterFuture;
@@ -119,6 +120,7 @@ class _ReaderPageState extends State<ReaderPage> {
       observerController: _observerController,
       pageController: _pageController,
       onBeforeTurnPage: _restoreScaleBeforeTurnPage,
+      onChapterBoundary: _handleChapterBoundary,
     );
     _volumeController = ReaderVolumeController(
       actionController: _actionController,
@@ -818,7 +820,24 @@ class _ReaderPageState extends State<ReaderPage> {
     return future.then<void>((_) {}, onError: (_) {});
   }
 
-  void _goToChapter(int index) {
+  bool _handleChapterBoundary(bool isNext) {
+    if (_isSeeking || _isRestoringInitialPage || widget.chapters.isEmpty) {
+      return false;
+    }
+
+    final targetIndex = _chapterIndex + (isNext ? 1 : -1);
+    if (targetIndex < 0 || targetIndex >= widget.chapters.length) {
+      return false;
+    }
+
+    _goToChapter(
+      targetIndex,
+      initialPageIndex: isNext ? 0 : _chapterEndPageIndex,
+    );
+    return true;
+  }
+
+  void _goToChapter(int index, {int initialPageIndex = 0}) {
     if (index < 0 ||
         index >= widget.chapters.length ||
         index == _chapterIndex) {
@@ -833,19 +852,21 @@ class _ReaderPageState extends State<ReaderPage> {
     _pageCorrectionTimer?.cancel();
     _historyManager.markLoading();
     final oldImageSizeCubit = _imageSizeCubit;
+    final targetInitialPageIndex = initialPageIndex < 0 ? 0 : initialPageIndex;
     setState(() {
       _chapterIndex = index;
       _chapterFuture = _loadChapter(index);
-      _pageIndex = 0;
-      _initialPageIndex = 0;
+      _pageIndex = targetInitialPageIndex;
+      _initialPageIndex = targetInitialPageIndex;
       _chapterSnapshot = null;
       _chapterPages = const [];
       _pageSizeKeys = const [];
       _pageKeys = const [];
       _slotKeys = const [];
       _imageSizeCubit = null;
-      _shouldRestoreInitialPage = false;
-      _isRestoringInitialPage = false;
+      _shouldRestoreInitialPage = targetInitialPageIndex > 0;
+      _isRestoringInitialPage = targetInitialPageIndex > 0;
+      _isRestoreScheduled = false;
       _restoreAttempts = 0;
     });
     unawaited(oldImageSizeCubit?.close());

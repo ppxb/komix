@@ -11,6 +11,7 @@ class ReaderActionController {
   final ListObserverController observerController;
   final PageController pageController;
   final bool Function(bool isNext)? onBeforeTurnPage;
+  final bool Function(bool isNext)? onChapterBoundary;
 
   ReaderActionController({
     required this.context,
@@ -18,6 +19,7 @@ class ReaderActionController {
     required this.observerController,
     required this.pageController,
     this.onBeforeTurnPage,
+    this.onChapterBoundary,
   });
 
   ReadSettingState get _readSetting =>
@@ -121,6 +123,12 @@ class ReaderActionController {
       if (totalSlots <= 0 || !scrollController.hasClients) return;
 
       final currentPage = _pageIndex + (next ? 1 : -1);
+      if (currentPage < 0 || currentPage >= totalSlots) {
+        if (_isVerticalScrollAtEdge(isNext: next) &&
+            _tryHandleChapterBoundary(isNext: next)) {
+          return;
+        }
+      }
       final targetPage = currentPage.clamp(0, totalSlots - 1).toInt();
 
       if (_noAnimation) {
@@ -138,6 +146,11 @@ class ReaderActionController {
       }
     } else {
       if (!scrollController.hasClients) return;
+      if (offset != 0 &&
+          _isVerticalScrollAtEdge(isNext: offset > 0) &&
+          _tryHandleChapterBoundary(isNext: offset > 0)) {
+        return;
+      }
 
       final currentOffset = scrollController.offset;
       final targetOffset = currentOffset + offset;
@@ -155,6 +168,10 @@ class ReaderActionController {
 
   void _scrollVerticalAuto() {
     if (!scrollController.hasClients) return;
+    if (_isVerticalScrollAtEdge(isNext: true) &&
+        _tryHandleChapterBoundary(isNext: true)) {
+      return;
+    }
 
     final viewportHeight = MediaQuery.of(_activeContext).size.height;
     final distancePercent = _autoScrollColumnDistancePercent.clamp(10, 100);
@@ -178,6 +195,10 @@ class ReaderActionController {
 
   void _scrollVerticalByPercent({required int percent, required bool next}) {
     if (!scrollController.hasClients) return;
+    if (_isVerticalScrollAtEdge(isNext: next) &&
+        _tryHandleChapterBoundary(isNext: next)) {
+      return;
+    }
 
     final viewportHeight = MediaQuery.of(_activeContext).size.height;
     final distancePercent = percent.clamp(10, 100);
@@ -204,14 +225,16 @@ class ReaderActionController {
   void _turnPage({required bool isNext}) {
     if (onBeforeTurnPage?.call(isNext) ?? false) return;
     if (!pageController.hasClients) return;
+    final totalSlots = _totalSlots;
+    if (totalSlots <= 0) return;
+
+    final currentPage = _pageIndex + (isNext ? 1 : -1);
+    if (currentPage < 0 || currentPage >= totalSlots) {
+      if (_tryHandleChapterBoundary(isNext: isNext)) return;
+    }
 
     if (_noAnimation) {
-      final totalSlots = _totalSlots;
-      if (totalSlots <= 0) return;
-
-      final targetPage = (_pageIndex + (isNext ? 1 : -1))
-          .clamp(0, totalSlots - 1)
-          .toInt();
+      final targetPage = currentPage.clamp(0, totalSlots - 1).toInt();
       pageController.jumpToPage(targetPage);
       return;
     }
@@ -227,5 +250,18 @@ class ReaderActionController {
         curve: Curves.easeInOut,
       );
     }
+  }
+
+  bool _tryHandleChapterBoundary({required bool isNext}) {
+    return onChapterBoundary?.call(isNext) ?? false;
+  }
+
+  bool _isVerticalScrollAtEdge({required bool isNext}) {
+    final position = scrollController.position;
+    const tolerance = 1.0;
+    if (isNext) {
+      return position.pixels >= position.maxScrollExtent - tolerance;
+    }
+    return position.pixels <= position.minScrollExtent + tolerance;
   }
 }
