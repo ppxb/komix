@@ -78,16 +78,48 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
   void _openReader(Comic comic, List<Chapter> chapters, int chapterIndex) {
     if (chapters.isEmpty) return;
 
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.black,
+      systemNavigationBarColor: Colors.black,
+      statusBarIconBrightness: Brightness.light,
+      statusBarBrightness: Brightness.dark,
+      systemNavigationBarIconBrightness: Brightness.light,
+    ));
+
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ReaderPage(
-          providerId: widget.providerId,
-          comic: comic,
-          chapters: chapters,
-          initialChapterIndex: chapterIndex,
-        ),
+      PageRouteBuilder(
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return ColoredBox(
+            color: Colors.black,
+            child: ReaderPage(
+              providerId: widget.providerId,
+              comic: comic,
+              chapters: chapters,
+              initialChapterIndex: chapterIndex,
+            ),
+          );
+        },
       ),
-    );
+    ).then((_) {
+      if (!mounted) return;
+      final theme = Theme.of(context);
+      final appBarBackground = _isAppBarOpaque
+          ? theme.colorScheme.surface
+          : Colors.transparent;
+      SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
+        statusBarColor: appBarBackground,
+        statusBarIconBrightness: theme.brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
+        statusBarBrightness: theme.brightness,
+        systemNavigationBarColor: theme.colorScheme.surface,
+        systemNavigationBarIconBrightness: theme.brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
+      ));
+    });
   }
 
   bool _handleScrollNotification(ScrollNotification notification) {
@@ -166,6 +198,7 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
       ),
       floatingActionButton: _StartReadingFab(
         detailFuture: _detailFuture,
+        isExtended: !_isAppBarOpaque,
         onStartReading: (data) => _openReader(data.comic, data.chapters, 0),
       ),
       body: NotificationListener<ScrollNotification>(
@@ -216,10 +249,12 @@ enum _DetailMenuAction { refresh, addFavorite }
 
 class _StartReadingFab extends StatelessWidget {
   final Future<_ComicDetailData> detailFuture;
+  final bool isExtended;
   final ValueChanged<_ComicDetailData> onStartReading;
 
   const _StartReadingFab({
     required this.detailFuture,
+    required this.isExtended,
     required this.onStartReading,
   });
 
@@ -229,15 +264,18 @@ class _StartReadingFab extends StatelessWidget {
       future: detailFuture,
       builder: (context, snapshot) {
         final data = snapshot.data;
-        if (data == null || data.chapters.isEmpty) {
+        final hasChapters = data != null && data.chapters.isNotEmpty;
+        if (snapshot.hasError || (data != null && data.chapters.isEmpty)) {
           return const SizedBox.shrink();
         }
 
         return FloatingActionButton.extended(
-          tooltip: '进入第一话',
-          onPressed: () => onStartReading(data),
+          heroTag: null,
+          isExtended: isExtended,
+          tooltip: '开始阅读',
+          onPressed: hasChapters ? () => onStartReading(data!) : null,
           icon: const Icon(Icons.play_arrow),
-          label: const Text('第一话'),
+          label: const Text('开始'),
         );
       },
     );

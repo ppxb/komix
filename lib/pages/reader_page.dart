@@ -5,6 +5,14 @@ import 'package:flutter/services.dart';
 import '../models/comic.dart';
 import '../providers/provider_registry.dart';
 
+const _readerSystemOverlayStyle = SystemUiOverlayStyle(
+  statusBarColor: Colors.black,
+  systemNavigationBarColor: Colors.black,
+  statusBarIconBrightness: Brightness.light,
+  statusBarBrightness: Brightness.dark,
+  systemNavigationBarIconBrightness: Brightness.light,
+);
+
 class ReaderPage extends StatefulWidget {
   final String providerId;
   final Comic comic;
@@ -64,6 +72,7 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _applySystemUiVisibility(bool visible) {
+    SystemChrome.setSystemUIOverlayStyle(_readerSystemOverlayStyle);
     if (visible) {
       SystemChrome.setEnabledSystemUIMode(
         SystemUiMode.manual,
@@ -191,65 +200,71 @@ class _ReaderPageState extends State<ReaderPage> {
     final hasPrevious = _chapterIndex > 0;
     final hasNext = _chapterIndex < widget.chapters.length - 1;
 
-    return Scaffold(
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: _toggleMenu,
-              child: NotificationListener<ScrollNotification>(
-                onNotification: _handleReaderScrollNotification,
-                child: FutureBuilder<_ReaderChapterData>(
-                  key: ValueKey(_chapterIndex),
-                  future: _chapterFuture,
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting &&
-                        !snapshot.hasData) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: _readerSystemOverlayStyle,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _toggleMenu,
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: _handleReaderScrollNotification,
+                  child: FutureBuilder<_ReaderChapterData>(
+                    key: ValueKey(_chapterIndex),
+                    future: _chapterFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting &&
+                          !snapshot.hasData) {
+                        return const Center(
+                          child: CircularProgressIndicator(color: Colors.white),
+                        );
+                      }
 
-                    if (snapshot.hasError && !snapshot.hasData) {
-                      return _ReaderErrorView(
-                        message: snapshot.error.toString(),
+                      if (snapshot.hasError && !snapshot.hasData) {
+                        return _ReaderErrorView(
+                          message: snapshot.error.toString(),
+                          onRetry: _reloadChapter,
+                        );
+                      }
+
+                      final data = snapshot.requireData;
+                      if (data.images.isEmpty) {
+                        return _ReaderEmptyView(onRetry: _reloadChapter);
+                      }
+
+                      return _ReaderImageList(
+                        images: data.images,
+                        controller: _scrollController,
                         onRetry: _reloadChapter,
                       );
-                    }
-
-                    final data = snapshot.requireData;
-                    if (data.images.isEmpty) {
-                      return _ReaderEmptyView(onRetry: _reloadChapter);
-                    }
-
-                    return _ReaderImageList(
-                      images: data.images,
-                      controller: _scrollController,
-                      onRetry: _reloadChapter,
-                    );
-                  },
+                    },
+                  ),
                 ),
               ),
             ),
-          ),
-          _ReaderTopBar(
-            title: widget.comic.title,
-            isVisible: _isMenuVisible,
-            onRefresh: _reloadChapter,
-          ),
-          _ReaderBottomOverlay(
-            isVisible: _isMenuVisible,
-            child: _ReaderBottomBar(
-              chapterTitle: _chapterTitle(_chapterIndex),
-              chapterIndex: _chapterIndex,
-              chapterCount: widget.chapters.length,
-              hasPrevious: hasPrevious,
-              hasNext: hasNext,
-              onPrevious: () => _goToChapter(_chapterIndex - 1),
-              onChapterPicker: _showChapterPicker,
-              onNext: () => _goToChapter(_chapterIndex + 1),
+            _ReaderTopBar(
+              title: widget.comic.title,
+              isVisible: _isMenuVisible,
+              onRefresh: _reloadChapter,
             ),
-          ),
-        ],
+            _ReaderBottomOverlay(
+              isVisible: _isMenuVisible,
+              child: _ReaderBottomBar(
+                chapterTitle: _chapterTitle(_chapterIndex),
+                chapterIndex: _chapterIndex,
+                chapterCount: widget.chapters.length,
+                hasPrevious: hasPrevious,
+                hasNext: hasNext,
+                onPrevious: () => _goToChapter(_chapterIndex - 1),
+                onChapterPicker: _showChapterPicker,
+                onNext: () => _goToChapter(_chapterIndex + 1),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -429,22 +444,25 @@ class _ReaderBottomBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BottomAppBar(
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Material(
+      color: colorScheme.surface,
+      elevation: 3,
       child: SizedBox(
-        height: 64,
+        height: 52,
         child: Row(
           children: [
-            IconButton(
+            _ReaderBottomIconButton(
               tooltip: '上一章',
               onPressed: hasPrevious ? onPrevious : null,
-              icon: const Icon(Icons.skip_previous),
+              icon: Icons.skip_previous,
             ),
             Expanded(
               child: InkWell(
-                borderRadius: BorderRadius.circular(8),
                 onTap: chapterCount > 0 ? onChapterPicker : null,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.center,
@@ -454,15 +472,14 @@ class _ReaderBottomBar extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.titleSmall,
+                        style: Theme.of(context).textTheme.labelLarge,
                       ),
-                      const SizedBox(height: 2),
                       Text(
                         chapterCount == 0
                             ? '暂无章节'
                             : '${chapterIndex + 1} / $chapterCount',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ],
@@ -470,19 +487,47 @@ class _ReaderBottomBar extends StatelessWidget {
                 ),
               ),
             ),
-            IconButton(
+            _ReaderBottomIconButton(
               tooltip: '章节列表',
               onPressed: chapterCount > 0 ? onChapterPicker : null,
-              icon: const Icon(Icons.format_list_bulleted),
+              icon: Icons.format_list_bulleted,
             ),
-            IconButton(
+            _ReaderBottomIconButton(
               tooltip: '下一章',
               onPressed: hasNext ? onNext : null,
-              icon: const Icon(Icons.skip_next),
+              icon: Icons.skip_next,
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ReaderBottomIconButton extends StatelessWidget {
+  final String tooltip;
+  final VoidCallback? onPressed;
+  final IconData icon;
+
+  const _ReaderBottomIconButton({
+    required this.tooltip,
+    required this.onPressed,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      visualDensity: VisualDensity.compact,
+      style: IconButton.styleFrom(
+        fixedSize: const Size.square(40),
+        minimumSize: const Size.square(40),
+        padding: EdgeInsets.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      icon: Icon(icon, size: 22),
     );
   }
 }
@@ -494,6 +539,9 @@ class _ReaderEmptyView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const foregroundColor = Colors.white;
+    const secondaryColor = Colors.white70;
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -503,14 +551,18 @@ class _ReaderEmptyView extends StatelessWidget {
             Icon(
               Icons.image_not_supported_outlined,
               size: 48,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              color: secondaryColor,
             ),
             const SizedBox(height: 16),
-            const Text('暂无图片'),
+            const Text(
+              '暂无图片',
+              style: TextStyle(color: foregroundColor),
+            ),
             const SizedBox(height: 16),
             OutlinedButton.icon(
               onPressed: onRetry,
               icon: const Icon(Icons.refresh),
+              style: OutlinedButton.styleFrom(foregroundColor: secondaryColor),
               label: const Text('重试'),
             ),
           ],
@@ -528,6 +580,8 @@ class _ReaderErrorView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const foregroundColor = Colors.white;
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -540,7 +594,11 @@ class _ReaderErrorView extends StatelessWidget {
               color: Theme.of(context).colorScheme.error,
             ),
             const SizedBox(height: 16),
-            Text(message, textAlign: TextAlign.center),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: foregroundColor),
+            ),
             const SizedBox(height: 16),
             FilledButton.icon(
               onPressed: onRetry,
