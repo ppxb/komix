@@ -485,6 +485,22 @@ class _AutoScrollSection extends StatelessWidget {
           ),
           if (setting.autoScroll) ...[
             _SliderRow(
+              label: '条漫距离',
+              value: setting.autoScrollColumnDistancePercent
+                  .clamp(10, 100)
+                  .toInt(),
+              min: 10,
+              max: 100,
+              divisions: 90,
+              suffix: '%屏',
+              onChanged: (value) {
+                cubit.updateReadSetting(
+                  (current) =>
+                      current.copyWith(autoScrollColumnDistancePercent: value),
+                );
+              },
+            ),
+            _SliderRow(
               label: '条漫间隔',
               value: setting.autoScrollColumnIntervalMs
                   .clamp(300, 5000)

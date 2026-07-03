@@ -84,6 +84,7 @@ class _ReaderPageState extends State<ReaderPage> {
   List<String> _pageSizeKeys = const [];
   ReaderChapterSnapshot? _chapterSnapshot;
   List<ReaderPageImage> _chapterPages = const [];
+  final Map<int, Future<_ReaderChapterData>> _prefetchedChapterData = {};
   Timer? _progressSaveTimer;
   Timer? _pageCorrectionTimer;
   Timer? _autoReadTimer;
@@ -91,6 +92,8 @@ class _ReaderPageState extends State<ReaderPage> {
   int? _autoReadIntervalMs;
   bool _isSeeking = false;
   bool _isMenuVisible = false;
+  bool _isAutoReadPaused = false;
+  bool _lastAutoScrollEnabled = false;
   bool _showEinkMask = false;
   double _currentViewerScale = 1.0;
   int _pageIndex = 0;
@@ -159,6 +162,7 @@ class _ReaderPageState extends State<ReaderPage> {
     _pageCorrectionTimer?.cancel();
     _autoReadTimer?.cancel();
     _einkDelayTimer?.cancel();
+    _prefetchedChapterData.clear();
     unawaited(_saveProgressNow());
     SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.manual,
@@ -217,12 +221,25 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _syncAutoRead(ReadSettingState readSetting) {
+    final autoScrollEnabled = readSetting.autoScroll;
+    if (!autoScrollEnabled) {
+      _lastAutoScrollEnabled = false;
+      _isAutoReadPaused = false;
+      _stopAutoRead();
+      return;
+    }
+
+    if (!_lastAutoScrollEnabled) {
+      _isAutoReadPaused = false;
+    }
+    _lastAutoScrollEnabled = true;
+
     final intervalMs = isColumnReadMode(readSetting.readMode)
         ? readSetting.autoScrollColumnIntervalMs.clamp(300, 5000)
         : readSetting.autoScrollPageIntervalMs.clamp(800, 10000);
     final intervalMsInt = intervalMs.toInt();
     final shouldRun =
-        readSetting.autoScroll &&
+        !_isAutoReadPaused &&
         !_isMenuVisible &&
         !_isSeeking &&
         _slotCount > 0;
@@ -242,6 +259,13 @@ class _ReaderPageState extends State<ReaderPage> {
       if (!mounted || _isMenuVisible || _isSeeking) return;
       _actionController.onAutoReadTick();
     });
+  }
+
+  void _toggleAutoReadPaused() {
+    setState(() {
+      _isAutoReadPaused = !_isAutoReadPaused;
+    });
+    _syncAutoRead(context.read<GlobalSettingCubit>().state.readSetting);
   }
 
   void _syncVolumeKeyInterception(ReadSettingState readSetting) {
@@ -770,8 +794,13 @@ class _ReaderPageState extends State<ReaderPage> {
     return widget.chapters.length == 1 ? '单章节' : chapter.name;
   }
 
-  Future<_ReaderChapterData> _loadChapter(int index) async {
-    _historyManager.markLoading();
+  Future<_ReaderChapterData> _loadChapter(
+    int index, {
+    bool markHistoryLoading = true,
+  }) async {
+    if (markHistoryLoading) {
+      _historyManager.markLoading();
+    }
     if (widget.chapters.isEmpty) {
       throw StateError('暂无章节');
     }
@@ -796,6 +825,43 @@ class _ReaderPageState extends State<ReaderPage> {
     );
   }
 
+  Future<_ReaderChapterData> _takeChapterFuture(int index) {
+    return _prefetchedChapterData.remove(index) ?? _loadChapter(index);
+  }
+
+  void _prefetchAdjacentChapters() {
+    if (!mounted || widget.chapters.length <= 1) return;
+
+    final keepIndexes = <int>{_chapterIndex - 1, _chapterIndex + 1};
+    _prefetchedChapterData.removeWhere(
+      (index, _) => !keepIndexes.contains(index),
+    );
+    _prefetchChapter(_chapterIndex - 1);
+    _prefetchChapter(_chapterIndex + 1);
+  }
+
+  void _prefetchChapter(int index) {
+    if (index < 0 ||
+        index >= widget.chapters.length ||
+        index == _chapterIndex ||
+        _prefetchedChapterData.containsKey(index)) {
+      return;
+    }
+
+    final future = _loadChapter(index, markHistoryLoading: false);
+    _prefetchedChapterData[index] = future;
+    unawaited(
+      future.then<void>(
+        (_) {},
+        onError: (_) {
+          if (_prefetchedChapterData[index] == future) {
+            _prefetchedChapterData.remove(index);
+          }
+        },
+      ),
+    );
+  }
+
   Future<ReaderChapterSnapshot> _loadProviderChapterSnapshot(
     Chapter chapter,
   ) async {
@@ -813,6 +879,7 @@ class _ReaderPageState extends State<ReaderPage> {
   Future<void> _reloadChapter() {
     _hideEinkMask();
     _resetViewerTransformIfNeeded();
+    _prefetchedChapterData.remove(_chapterIndex);
     final future = _loadChapter(_chapterIndex);
     setState(() {
       _chapterFuture = future;
@@ -855,7 +922,7 @@ class _ReaderPageState extends State<ReaderPage> {
     final targetInitialPageIndex = initialPageIndex < 0 ? 0 : initialPageIndex;
     setState(() {
       _chapterIndex = index;
-      _chapterFuture = _loadChapter(index);
+      _chapterFuture = _takeChapterFuture(index);
       _pageIndex = targetInitialPageIndex;
       _initialPageIndex = targetInitialPageIndex;
       _chapterSnapshot = null;
@@ -1084,6 +1151,11 @@ class _ReaderPageState extends State<ReaderPage> {
                             data.persistedSizes,
                           );
                           _historyManager.markLoaded();
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (mounted) {
+                              _prefetchAdjacentChapters();
+                            }
+                          });
                           if (snapshotChanged) {
                             WidgetsBinding.instance.addPostFrameCallback((_) {
                               if (!mounted) return;
@@ -1206,6 +1278,12 @@ class _ReaderPageState extends State<ReaderPage> {
                   totalPageCount: _chapterPages.length,
                   enableDoublePage: effectiveDoublePageEnabled,
                 ),
+              if (_chapterPages.isNotEmpty && readSetting.autoScroll)
+                _ReaderAutoReadButton(
+                  isMenuVisible: _isMenuVisible,
+                  isPaused: _isAutoReadPaused,
+                  onPressed: _toggleAutoReadPaused,
+                ),
               _ReaderTopBar(
                 title: widget.comic.title,
                 chapterTitle: _chapterTitle(_chapterIndex),
@@ -1239,6 +1317,41 @@ class _ReaderPageState extends State<ReaderPage> {
                   ),
                 ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReaderAutoReadButton extends StatelessWidget {
+  final bool isMenuVisible;
+  final bool isPaused;
+  final VoidCallback onPressed;
+
+  const _ReaderAutoReadButton({
+    required this.isMenuVisible,
+    required this.isPaused,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomPadding = MediaQuery.paddingOf(context).bottom;
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+      right: 16,
+      bottom: (isMenuVisible ? 104.0 : 16.0) + bottomPadding,
+      child: FloatingActionButton.small(
+        heroTag: 'reader_auto_read_toggle',
+        tooltip: isPaused ? '继续自动阅读' : '暂停自动阅读',
+        onPressed: onPressed,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          child: Icon(
+            isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+            key: ValueKey(isPaused),
           ),
         ),
       ),
