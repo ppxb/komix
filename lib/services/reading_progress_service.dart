@@ -1,6 +1,8 @@
 import 'dart:convert';
 
-import 'package:shared_preferences/shared_preferences.dart';
+import '../main.dart';
+import '../object_box/model.dart';
+import '../object_box/objectbox.g.dart';
 
 class ReadingProgress {
   final String providerId;
@@ -71,58 +73,125 @@ class ReadingProgressService {
 
   static final ReadingProgressService instance = ReadingProgressService._();
 
-  static const _keyPrefix = 'reading_progress:v2:';
-
   Future<ReadingProgress?> getProgress(String providerId, String comicId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_key(providerId, comicId));
-    if (raw == null || raw.isEmpty) return null;
-
+    final query = objectbox.unifiedHistoryBox
+        .query(UnifiedComicHistory_.uniqueKey.equals(_key(providerId, comicId)))
+        .build();
     try {
-      final json = jsonDecode(raw);
-      if (json is! Map) return null;
-      return ReadingProgress.fromJson(Map<String, dynamic>.from(json));
-    } catch (_) {
-      return null;
+      final history = query.findFirst();
+      if (history == null || history.deleted) return null;
+      return _fromHistory(history);
+    } finally {
+      query.close();
     }
   }
 
   Future<void> saveProgress(ReadingProgress progress) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _key(progress.providerId, progress.comicId),
-      jsonEncode(progress.toJson()),
-    );
+    final box = objectbox.unifiedHistoryBox;
+    final key = _key(progress.providerId, progress.comicId);
+    final query = box
+        .query(UnifiedComicHistory_.uniqueKey.equals(key))
+        .build();
+
+    try {
+      final existing = query.findFirst();
+      final now = progress.updatedAt.toUtc();
+      final entity =
+          existing ??
+          UnifiedComicHistory(
+            uniqueKey: key,
+            source: progress.providerId,
+            comicId: progress.comicId,
+            title: progress.comicTitle,
+            description: '',
+            cover: progress.coverUrl,
+            creator: '',
+            titleMeta: '',
+            metadata: '',
+            chapterId: progress.chapterId,
+            chapterTitle: progress.chapterTitle,
+            chapterOrder: progress.chapterIndex,
+            pageIndex: progress.pageIndex,
+            createdAt: now,
+            lastReadAt: now,
+            updatedAt: now,
+            deleted: false,
+            schemaVersion: 2,
+          );
+
+      entity
+        ..source = progress.providerId
+        ..comicId = progress.comicId
+        ..title = progress.comicTitle
+        ..cover = progress.coverUrl
+        ..chapterId = progress.chapterId
+        ..chapterTitle = progress.chapterTitle
+        ..chapterOrder = progress.chapterIndex
+        ..pageIndex = progress.pageIndex
+        ..metadata = jsonEncode({
+          'chapter_count': progress.chapterCount,
+          'page_count': progress.pageCount,
+        })
+        ..lastReadAt = now
+        ..updatedAt = now
+        ..deleted = false;
+
+      box.put(entity);
+    } finally {
+      query.close();
+    }
   }
 
   Future<List<ReadingProgress>> getAllProgress() async {
-    final prefs = await SharedPreferences.getInstance();
-    final items = <ReadingProgress>[];
-
-    for (final key in prefs.getKeys()) {
-      if (!key.startsWith(_keyPrefix)) continue;
-      final raw = prefs.getString(key);
-      if (raw == null || raw.isEmpty) continue;
-
-      try {
-        final json = jsonDecode(raw);
-        if (json is! Map) continue;
-        final progress = ReadingProgress.fromJson(
-          Map<String, dynamic>.from(json),
-        );
-        if (progress.providerId.isEmpty || progress.comicId.isEmpty) continue;
-        if (progress.pageCount <= 0) continue;
-        items.add(progress);
-      } catch (_) {
-        continue;
-      }
-    }
+    final items = objectbox.unifiedHistoryBox
+        .getAll()
+        .where((history) => !history.deleted)
+        .map(_fromHistory)
+        .where(
+          (progress) =>
+              progress.providerId.isNotEmpty &&
+              progress.comicId.isNotEmpty &&
+              progress.pageCount > 0,
+        )
+        .toList();
 
     items.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return items;
   }
 
+  ReadingProgress _fromHistory(UnifiedComicHistory history) {
+    final metadata = _decodeMetadata(history.metadata);
+    final pageCount = (metadata['page_count'] as num?)?.toInt() ?? 0;
+    final chapterCount = (metadata['chapter_count'] as num?)?.toInt() ?? 0;
+
+    return ReadingProgress(
+      providerId: history.source,
+      comicId: history.comicId,
+      comicTitle: history.title,
+      coverUrl: history.cover,
+      chapterId: history.chapterId,
+      chapterTitle: history.chapterTitle,
+      chapterIndex: history.chapterOrder,
+      chapterCount: chapterCount,
+      pageIndex: history.pageIndex,
+      pageCount: pageCount,
+      updatedAt: history.lastReadAt.toUtc(),
+    );
+  }
+
+  Map<String, dynamic> _decodeMetadata(String raw) {
+    if (raw.trim().isEmpty) return const <String, dynamic>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {}
+    return const <String, dynamic>{};
+  }
+
   String _key(String providerId, String comicId) {
-    return '$_keyPrefix${Uri.encodeComponent(providerId)}:${Uri.encodeComponent(comicId)}';
+    return '$providerId:$comicId';
   }
 }

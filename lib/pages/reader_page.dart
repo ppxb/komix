@@ -1,18 +1,26 @@
 import 'dart:async';
 import 'dart:ui';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:scrollview_observer/scrollview_observer.dart';
 
+import '../config/global/global_setting.dart';
 import '../models/comic.dart';
 import '../models/reader_snapshot.dart';
 import '../providers/provider_registry.dart';
+import '../reader/image_size_cache_store.dart';
+import '../reader/image_size_cubit.dart';
+import '../reader/reader_action_controller.dart';
 import '../reader/reader_cubit.dart';
-import '../services/reading_progress_service.dart';
+import '../reader/reader_gesture_logic.dart';
+import '../reader/reader_history_manager.dart';
+import '../reader/reader_image_loader.dart';
+import '../reader/reader_image_view.dart';
+import '../reader/reader_layout.dart';
+import '../reader/reader_keyboard_shortcuts.dart';
 
 const _readerSystemOverlayStyle = SystemUiOverlayStyle(
   statusBarColor: Colors.black,
@@ -46,12 +54,17 @@ class _ReaderPageState extends State<ReaderPage> {
   static const _estimatedPageAspectRatio = 1.42;
 
   late int _chapterIndex;
-  late Future<ReaderChapterSnapshot> _chapterFuture;
+  late Future<_ReaderChapterData> _chapterFuture;
   late final ReaderCubit _readerCubit;
   late final ListObserverController _observerController;
+  late final PageController _pageController;
+  late final FocusNode _readerFocusNode;
+  late final ReaderActionController _actionController;
+  late final ReaderHistoryManager _historyManager;
   final ScrollController _scrollController = ScrollController();
-  final Map<String, Size> _imageSizes = {};
+  ImageSizeCubit? _imageSizeCubit;
   List<GlobalKey> _pageKeys = const [];
+  List<String> _pageSizeKeys = const [];
   ReaderChapterSnapshot? _chapterSnapshot;
   List<ReaderPageImage> _chapterPages = const [];
   Timer? _progressSaveTimer;
@@ -64,6 +77,7 @@ class _ReaderPageState extends State<ReaderPage> {
   bool _isRestoringInitialPage = false;
   bool _isRestoreScheduled = false;
   int _restoreAttempts = 0;
+  TapDownDetails? _tapDownDetails;
 
   @override
   void initState() {
@@ -72,9 +86,31 @@ class _ReaderPageState extends State<ReaderPage> {
     _chapterIndex = lastIndex < 0
         ? 0
         : widget.initialChapterIndex.clamp(0, lastIndex).toInt();
-    _chapterFuture = _loadChapter(_chapterIndex);
     _readerCubit = ReaderCubit();
     _observerController = ListObserverController(controller: _scrollController);
+    _pageController = PageController(initialPage: 0);
+    _readerFocusNode = FocusNode();
+    _actionController = ReaderActionController(
+      context: context,
+      scrollController: _scrollController,
+      observerController: _observerController,
+      pageController: _pageController,
+    );
+    _historyManager = ReaderHistoryManager(
+      providerId: widget.providerId,
+      comic: widget.comic,
+      chapterCount: widget.chapters.length,
+      getChapterId: () {
+        if (widget.chapters.isEmpty) return '';
+        return _chapterSnapshot?.chapter.id ?? widget.chapters[_chapterIndex].id;
+      },
+      getChapterTitle: () => _chapterTitle(_chapterIndex),
+      getChapterIndex: () => _chapterIndex,
+      getPageIndex: () => _pageIndex,
+      getPageCount: () => _chapterPages.length,
+    );
+    unawaited(_historyManager.init());
+    _chapterFuture = _loadChapter(_chapterIndex);
     _initialPageIndex = widget.initialPageIndex < 0
         ? 0
         : widget.initialPageIndex;
@@ -97,6 +133,10 @@ class _ReaderPageState extends State<ReaderPage> {
     );
     _scrollController.removeListener(_handleScrollChanged);
     _scrollController.dispose();
+    _pageController.dispose();
+    _readerFocusNode.dispose();
+    _historyManager.stop();
+    unawaited(_imageSizeCubit?.close());
     unawaited(_readerCubit.close());
     super.dispose();
   }
@@ -129,6 +169,21 @@ class _ReaderPageState extends State<ReaderPage> {
 
   void _toggleMenu() {
     _setMenuVisible(!_isMenuVisible);
+  }
+
+  Future<void> _handleTap() async {
+    await Future<void>.delayed(Duration.zero);
+    final details = _tapDownDetails;
+    if (details == null || !mounted) return;
+
+    ReaderGestureLogic.handleTap(
+      actionController: _actionController,
+      controller: _pageController,
+      context: context,
+      details: details,
+      onToggleMenu: _toggleMenu,
+    );
+    _tapDownDetails = null;
   }
 
   void _handleScrollChanged() {
@@ -177,17 +232,29 @@ class _ReaderPageState extends State<ReaderPage> {
     return 0;
   }
 
+  double _readerContentWidth() {
+    final containerWidth = _readerPageWidth();
+    if (containerWidth <= 0) return 0;
+    final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
+    return getConstrainedImageWidth(
+      containerWidth: containerWidth,
+      enableSidePadding: readSetting.sidePaddingEnabled,
+      sidePaddingPercent: readSetting.sidePaddingPercent,
+    );
+  }
+
   double _estimatedPageHeight(int index, double width) {
     if (width <= 0 || index < 0 || index >= _chapterPages.length) return 0;
-    final size = _imageSizes[_chapterPages[index].cacheKey];
+    final size = _imageSizeCubit?.state.getSizeValue(index);
     if (size != null && size.width > 0 && size.height > 0) {
+      if ((size.width - width).abs() < 0.1) return size.height;
       return width * size.height / size.width;
     }
     return width * _estimatedPageAspectRatio;
   }
 
   double _estimatedPageOffset(int pageIndex) {
-    final width = _readerPageWidth();
+    final width = _readerContentWidth();
     final target = pageIndex.clamp(0, _lastPageIndex).toInt();
     var offset = 0.0;
     for (var i = 0; i < target; i++) {
@@ -196,7 +263,10 @@ class _ReaderPageState extends State<ReaderPage> {
     return offset;
   }
 
-  bool _syncChapterSnapshot(ReaderChapterSnapshot snapshot) {
+  bool _syncChapterSnapshot(
+    ReaderChapterSnapshot snapshot,
+    Map<int, Size> persistedSizes,
+  ) {
     final oldKeys = _chapterPages
         .map((page) => page.cacheKey)
         .toList(growable: false);
@@ -210,6 +280,7 @@ class _ReaderPageState extends State<ReaderPage> {
 
     _chapterSnapshot = snapshot;
     _chapterPages = snapshot.pages;
+    _pageSizeKeys = _buildPageSizeKeys(snapshot);
     _pageKeys = List<GlobalKey>.generate(
       snapshot.pages.length,
       (_) => GlobalKey(),
@@ -217,19 +288,35 @@ class _ReaderPageState extends State<ReaderPage> {
     );
     _pageIndex = _pageIndex.clamp(0, _lastPageIndex).toInt();
     _initialPageIndex = _initialPageIndex.clamp(0, _lastPageIndex).toInt();
+
+    final oldCubit = _imageSizeCubit;
+    final pageWidth = _readerContentWidth();
+    _imageSizeCubit = ImageSizeCubit.create(
+      defaultWidth: pageWidth > 0 ? pageWidth : 1,
+      count: snapshot.pages.length,
+      sourceTag: widget.providerId,
+      pageKeys: _pageSizeKeys,
+      defaultAspectRatio: _estimatedPageAspectRatio,
+      persistedCache: persistedSizes,
+    );
+    unawaited(oldCubit?.close());
     return true;
   }
 
-  void _handleImageSizeResolved(String url, Size size, int index) {
-    final oldSize = _imageSizes[url];
-    if (oldSize == size) return;
+  List<String> _buildPageSizeKeys(ReaderChapterSnapshot snapshot) {
+    return snapshot.pages
+        .map(
+          (page) =>
+              '${snapshot.providerId}|${snapshot.comic.id}|${snapshot.chapter.id}|${page.cacheKey}',
+        )
+        .toList(growable: false);
+  }
 
-    _imageSizes[url] = size;
+  void _handleImageSizeResolved(int index, Size size) {
+    _imageSizeCubit?.updateSize(index, size);
     if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      setState(() {});
-
       if (_isSeeking || _isRestoringInitialPage || index <= _pageIndex) {
         _schedulePageCorrection(_pageIndex);
       }
@@ -293,23 +380,7 @@ class _ReaderPageState extends State<ReaderPage> {
     if (widget.chapters.isEmpty || _chapterPages.isEmpty) {
       return Future<void>.value();
     }
-
-    final chapter = _chapterSnapshot?.chapter ?? widget.chapters[_chapterIndex];
-    return ReadingProgressService.instance.saveProgress(
-      ReadingProgress(
-        providerId: widget.providerId,
-        comicId: widget.comic.id,
-        comicTitle: widget.comic.title,
-        coverUrl: widget.comic.coverUrl,
-        chapterId: chapter.id,
-        chapterTitle: _chapterTitle(_chapterIndex),
-        chapterIndex: _chapterIndex,
-        chapterCount: widget.chapters.length,
-        pageIndex: _pageIndex.clamp(0, _lastPageIndex).toInt(),
-        pageCount: _chapterPages.length,
-        updatedAt: DateTime.now().toUtc(),
-      ),
-    );
+    return _historyManager.flushNow();
   }
 
   void _scheduleInitialPageRestore() {
@@ -401,7 +472,8 @@ class _ReaderPageState extends State<ReaderPage> {
     return widget.chapters.length == 1 ? '单章节' : chapter.name;
   }
 
-  Future<ReaderChapterSnapshot> _loadChapter(int index) async {
+  Future<_ReaderChapterData> _loadChapter(int index) async {
+    _historyManager.markLoading();
     if (widget.chapters.isEmpty) {
       throw StateError('暂无章节');
     }
@@ -412,10 +484,22 @@ class _ReaderPageState extends State<ReaderPage> {
     }
 
     final chapter = widget.chapters[index];
-    return provider.getReaderChapterSnapshot(
+    final snapshot = await provider.getReaderChapterSnapshot(
       comic: widget.comic,
       chapter: chapter,
       chapters: widget.chapters,
+    );
+    final pageSizeKeys = _buildPageSizeKeys(snapshot);
+    final persistedSizes = await ImageSizeCacheStore(
+      sourceTag: widget.providerId,
+      pageKeys: pageSizeKeys,
+    ).readIndexedSizes(
+      pageKeys: pageSizeKeys,
+      count: snapshot.pages.length,
+    );
+    return _ReaderChapterData(
+      snapshot: snapshot,
+      persistedSizes: persistedSizes,
     );
   }
 
@@ -435,6 +519,8 @@ class _ReaderPageState extends State<ReaderPage> {
     _progressSaveTimer?.cancel();
     unawaited(_saveProgressNow());
     _pageCorrectionTimer?.cancel();
+    _historyManager.markLoading();
+    final oldImageSizeCubit = _imageSizeCubit;
     setState(() {
       _chapterIndex = index;
       _chapterFuture = _loadChapter(index);
@@ -442,11 +528,14 @@ class _ReaderPageState extends State<ReaderPage> {
       _initialPageIndex = 0;
       _chapterSnapshot = null;
       _chapterPages = const [];
+      _pageSizeKeys = const [];
       _pageKeys = const [];
+      _imageSizeCubit = null;
       _shouldRestoreInitialPage = false;
       _isRestoringInitialPage = false;
       _restoreAttempts = 0;
     });
+    unawaited(oldImageSizeCubit?.close());
     _readerCubit.updateTotalSlots(0);
     _readerCubit.updatePageIndex(0);
 
@@ -517,12 +606,25 @@ class _ReaderPageState extends State<ReaderPage> {
           body: Stack(
             children: [
               Positioned.fill(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTap: _toggleMenu,
-                  child: NotificationListener<ScrollNotification>(
-                    onNotification: _handleReaderScrollNotification,
-                    child: FutureBuilder<ReaderChapterSnapshot>(
+                child: Focus(
+                  focusNode: _readerFocusNode,
+                  autofocus: true,
+                  onKeyEvent: (node, event) {
+                    final handled = handleGlobalKeyEvent(
+                      event,
+                      _actionController,
+                    );
+                    return handled
+                        ? KeyEventResult.handled
+                        : KeyEventResult.ignored;
+                  },
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTapDown: (details) => _tapDownDetails = details,
+                    onTap: _handleTap,
+                    child: NotificationListener<ScrollNotification>(
+                      onNotification: _handleReaderScrollNotification,
+                      child: FutureBuilder<_ReaderChapterData>(
                       key: ValueKey(_chapterIndex),
                       future: _chapterFuture,
                       builder: (context, snapshot) {
@@ -544,32 +646,53 @@ class _ReaderPageState extends State<ReaderPage> {
                         }
 
                         final data = snapshot.requireData;
-                        if (data.pages.isEmpty) {
+                        final chapterSnapshot = data.snapshot;
+                        if (chapterSnapshot.pages.isEmpty) {
                           return _ReaderEmptyView(onRetry: _reloadChapter);
                         }
 
-                        final snapshotChanged = _syncChapterSnapshot(data);
+                        final snapshotChanged = _syncChapterSnapshot(
+                          chapterSnapshot,
+                          data.persistedSizes,
+                        );
+                        _historyManager.markLoaded();
                         if (snapshotChanged) {
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             if (!mounted) return;
-                            _readerCubit.updateTotalSlots(data.pages.length);
+                            _readerCubit.updateTotalSlots(
+                              chapterSnapshot.pages.length,
+                            );
                             _readerCubit.updatePageIndex(_pageIndex);
                             setState(() {});
                             unawaited(_saveProgressNow());
                           });
                         }
+                        final imageSizeCubit = _imageSizeCubit;
+                        if (imageSizeCubit == null) {
+                          return const Center(
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                            ),
+                          );
+                        }
                         _scheduleInitialPageRestore();
-                        return _ReaderImageList(
-                          pageKeys: _pageKeys,
-                          pages: data.pages,
-                          imageSizes: _imageSizes,
-                          controller: _scrollController,
-                          observerController: _observerController,
-                          onPageObserved: _handleObservedPageIndex,
-                          onRetry: _reloadChapter,
-                          onSizeResolved: _handleImageSizeResolved,
+                        return BlocProvider.value(
+                          value: imageSizeCubit,
+                          child: _ReaderImageList(
+                            pageKeys: _pageKeys,
+                            providerId: chapterSnapshot.providerId,
+                            comicId: chapterSnapshot.comic.id,
+                            chapterId: chapterSnapshot.chapter.id,
+                            pages: chapterSnapshot.pages,
+                            controller: _scrollController,
+                            observerController: _observerController,
+                            onPageObserved: _handleObservedPageIndex,
+                            onRetry: _reloadChapter,
+                            onSizeResolved: _handleImageSizeResolved,
+                          ),
                         );
                       },
+                      ),
                     ),
                   ),
                 ),
@@ -721,18 +844,22 @@ class _ReaderBottomOverlay extends StatelessWidget {
 
 class _ReaderImageList extends StatelessWidget {
   final List<GlobalKey> pageKeys;
+  final String providerId;
+  final String comicId;
+  final String chapterId;
   final List<ReaderPageImage> pages;
-  final Map<String, Size> imageSizes;
   final ScrollController controller;
   final ListObserverController observerController;
   final ValueChanged<int> onPageObserved;
   final VoidCallback onRetry;
-  final void Function(String url, Size size, int index) onSizeResolved;
+  final void Function(int index, Size size) onSizeResolved;
 
   const _ReaderImageList({
     required this.pageKeys,
+    required this.providerId,
+    required this.comicId,
+    required this.chapterId,
     required this.pages,
-    required this.imageSizes,
     required this.controller,
     required this.observerController,
     required this.onPageObserved,
@@ -742,6 +869,9 @@ class _ReaderImageList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final readSetting = context.select(
+      (GlobalSettingCubit cubit) => cubit.state.readSetting,
+    );
     final listView = ListView.builder(
       controller: controller,
       cacheExtent: MediaQuery.sizeOf(context).height * 2,
@@ -749,14 +879,50 @@ class _ReaderImageList extends StatelessWidget {
       itemCount: pages.length,
       itemBuilder: (context, index) {
         final page = pages[index];
-        return _ReaderImage(
-          key: pageKeys[index],
-          url: page.url,
-          pageNumber: index + 1,
-          pageCount: pages.length,
-          knownSize: imageSizes[page.cacheKey],
-          onRetry: onRetry,
-          onSizeResolved: (size) => onSizeResolved(page.cacheKey, size, index),
+        return BlocSelector<
+          ImageSizeCubit,
+          ImageSizeState,
+          ({Size size, bool isCached})
+        >(
+          selector: (state) => (
+            size: state.getSizeValue(index),
+            isCached: state.resolvedIndices.contains(index),
+          ),
+          builder: (context, cached) {
+            final containerWidth = MediaQuery.sizeOf(context).width;
+            final width = getConstrainedImageWidth(
+              containerWidth: containerWidth,
+              enableSidePadding: readSetting.sidePaddingEnabled,
+              sidePaddingPercent: readSetting.sidePaddingPercent,
+            );
+            final displayHeight =
+                cached.size.width > 0 && cached.size.height > 0
+                ? width * cached.size.height / cached.size.width
+                : width * _ReaderPageState._estimatedPageAspectRatio;
+            return SizedBox(
+              width: containerWidth,
+              child: Center(
+                child: ReaderImageView(
+                  key: pageKeys[index],
+                  request: ReaderImageRequest(
+                    providerId: providerId,
+                    comicId: comicId,
+                    chapterId: chapterId,
+                    pageId: page.id,
+                    url: page.url,
+                    path: page.path,
+                    extern: page.extern,
+                  ),
+                  pageNumber: index + 1,
+                  pageCount: pages.length,
+                  displaySize: Size(width, displayHeight),
+                  isSizeResolved: cached.isCached,
+                  onRetry: onRetry,
+                  onSizeResolved: (size) => onSizeResolved(index, size),
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -769,121 +935,6 @@ class _ReaderImageList extends StatelessWidget {
         onPageObserved(visibleIndexes[visibleIndexes.length ~/ 2]);
       },
       child: listView,
-    );
-  }
-}
-
-class _ReaderImage extends StatefulWidget {
-  final String url;
-  final int pageNumber;
-  final int pageCount;
-  final Size? knownSize;
-  final VoidCallback onRetry;
-  final ValueChanged<Size> onSizeResolved;
-
-  const _ReaderImage({
-    super.key,
-    required this.url,
-    required this.pageNumber,
-    required this.pageCount,
-    required this.knownSize,
-    required this.onRetry,
-    required this.onSizeResolved,
-  });
-
-  @override
-  State<_ReaderImage> createState() => _ReaderImageState();
-}
-
-class _ReaderImageState extends State<_ReaderImage> {
-  ImageStream? _imageStream;
-  ImageStreamListener? _imageListener;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _resolveImageSize();
-  }
-
-  @override
-  void didUpdateWidget(covariant _ReaderImage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.url != widget.url || oldWidget.knownSize != widget.knownSize) {
-      _resolveImageSize();
-    }
-  }
-
-  @override
-  void dispose() {
-    _removeImageListener();
-    super.dispose();
-  }
-
-  void _resolveImageSize() {
-    if (widget.knownSize != null) {
-      _removeImageListener();
-      return;
-    }
-
-    _removeImageListener();
-    final provider = CachedNetworkImageProvider(widget.url);
-    final stream = provider.resolve(createLocalImageConfiguration(context));
-    final listener = ImageStreamListener((info, _) {
-      final size = Size(
-        info.image.width.toDouble(),
-        info.image.height.toDouble(),
-      );
-      widget.onSizeResolved(size);
-    });
-
-    _imageStream = stream;
-    _imageListener = listener;
-    stream.addListener(listener);
-  }
-
-  void _removeImageListener() {
-    final stream = _imageStream;
-    final listener = _imageListener;
-    if (stream != null && listener != null) {
-      stream.removeListener(listener);
-    }
-    _imageStream = null;
-    _imageListener = null;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth.isFinite
-            ? constraints.maxWidth
-            : MediaQuery.sizeOf(context).width;
-        final imageSize = widget.knownSize;
-        final height = imageSize != null && imageSize.width > 0
-            ? width * imageSize.height / imageSize.width
-            : width * _ReaderPageState._estimatedPageAspectRatio;
-
-        return Semantics(
-          label: '第 ${widget.pageNumber} 页，共 ${widget.pageCount} 页',
-          child: SizedBox(
-            width: double.infinity,
-            height: height,
-            child: CachedNetworkImage(
-              imageUrl: widget.url,
-              fit: BoxFit.contain,
-              alignment: Alignment.topCenter,
-              progressIndicatorBuilder: (context, url, progress) {
-                return Center(
-                  child: CircularProgressIndicator(value: progress.progress),
-                );
-              },
-              errorWidget: (context, url, error) {
-                return _ImageErrorView(onRetry: widget.onRetry);
-              },
-            ),
-          ),
-        );
-      },
     );
   }
 }
@@ -1071,6 +1122,16 @@ class _ReaderEmptyView extends StatelessWidget {
   }
 }
 
+class _ReaderChapterData {
+  final ReaderChapterSnapshot snapshot;
+  final Map<int, Size> persistedSizes;
+
+  const _ReaderChapterData({
+    required this.snapshot,
+    required this.persistedSizes,
+  });
+}
+
 class _ReaderErrorView extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;
@@ -1106,27 +1167,6 @@ class _ReaderErrorView extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _ImageErrorView extends StatelessWidget {
-  final VoidCallback onRetry;
-
-  const _ImageErrorView({required this.onRetry});
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Container(
-      height: 240,
-      color: colorScheme.surfaceContainerHighest,
-      alignment: Alignment.center,
-      child: TextButton.icon(
-        onPressed: onRetry,
-        icon: const Icon(Icons.refresh),
-        label: const Text('图片加载失败'),
       ),
     );
   }
