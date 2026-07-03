@@ -1,5 +1,5 @@
-use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
-use aes::Aes256;
+use aes::cipher::{BlockDecrypt, KeyInit};
+use aes::{Aes256, Block};
 use base64::{engine::general_purpose, Engine as _};
 use md5::{Digest, Md5};
 
@@ -65,13 +65,15 @@ pub fn aes_decrypt(encrypted_base64: &str, key_str: &str) -> anyhow::Result<Stri
         anyhow::bail!("AES 密文长度不是 16 字节块的整数倍");
     }
 
-    let mut buffer = encrypted_data.clone();
+    let mut buffer = encrypted_data;
     let cipher = Aes256::new_from_slice(key_str.as_bytes())
         .map_err(|error| anyhow::anyhow!("AES key 非法: {:?}", error))?;
 
     for chunk in buffer.chunks_exact_mut(16) {
-        let block = GenericArray::from_mut_slice(chunk);
-        cipher.decrypt_block(block);
+        let mut block = Block::default();
+        block.copy_from_slice(chunk);
+        cipher.decrypt_block(&mut block);
+        chunk.copy_from_slice(&block);
     }
 
     let decrypted = strip_pkcs7_padding(buffer)?;

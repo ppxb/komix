@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../models/comic.dart';
 import '../providers/provider_registry.dart';
+import 'reader_page.dart';
 
 class ComicDetailPage extends StatefulWidget {
   final String providerId;
@@ -22,6 +23,7 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
   late Future<_ComicDetailData> _detailFuture;
   final GlobalKey<RefreshIndicatorState> _refreshIndicatorKey =
       GlobalKey<RefreshIndicatorState>();
+  bool _isAppBarOpaque = false;
 
   String get _providerName =>
       ProviderRegistry().getProvider(widget.providerId)?.name ??
@@ -73,24 +75,58 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  void _openReader(Comic comic, List<Chapter> chapters, int chapterIndex) {
+    if (chapters.isEmpty) return;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ReaderPage(
+          providerId: widget.providerId,
+          comic: comic,
+          chapters: chapters,
+          initialChapterIndex: chapterIndex,
+        ),
+      ),
+    );
+  }
+
+  bool _handleScrollNotification(ScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) {
+      return false;
+    }
+
+    final shouldBeOpaque = notification.metrics.pixels > 0;
+    if (shouldBeOpaque != _isAppBarOpaque) {
+      setState(() {
+        _isAppBarOpaque = shouldBeOpaque;
+      });
+    }
+
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final pageBackground = Theme.of(context).colorScheme.surface;
+    final theme = Theme.of(context);
+    final pageBackground = theme.colorScheme.surface;
+    final appBarBackground = _isAppBarOpaque
+        ? pageBackground
+        : Colors.transparent;
 
     return Scaffold(
       backgroundColor: pageBackground,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: appBarBackground,
         elevation: 0,
         scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
         systemOverlayStyle: SystemUiOverlayStyle(
-          statusBarColor: Colors.transparent,
-          statusBarIconBrightness:
-              Theme.of(context).brightness == Brightness.dark
+          statusBarColor: appBarBackground,
+          statusBarIconBrightness: theme.brightness == Brightness.dark
               ? Brightness.light
               : Brightness.dark,
-          statusBarBrightness: Theme.of(context).brightness,
+          statusBarBrightness: theme.brightness,
         ),
         actions: [
           IconButton(
@@ -128,39 +164,45 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
           ),
         ],
       ),
-      body: FutureBuilder<_ComicDetailData>(
-        future: _detailFuture,
-        builder: (context, snapshot) {
-          final currentData = snapshot.data;
+      body: NotificationListener<ScrollNotification>(
+        onNotification: _handleScrollNotification,
+        child: FutureBuilder<_ComicDetailData>(
+          future: _detailFuture,
+          builder: (context, snapshot) {
+            final currentData = snapshot.data;
 
-          if (snapshot.connectionState == ConnectionState.waiting &&
-              currentData == null) {
+            if (snapshot.connectionState == ConnectionState.waiting &&
+                currentData == null) {
+              return _DetailBody(
+                comic: widget.initialComic,
+                providerName: _providerName,
+                chapters: const [],
+                refreshIndicatorKey: _refreshIndicatorKey,
+                onRefresh: _refreshDetail,
+                onChapterSelected: (_, __) {},
+                isLoading: true,
+              );
+            }
+
+            if (snapshot.hasError && currentData == null) {
+              return _ErrorView(
+                message: snapshot.error.toString(),
+                onRetry: _showRefreshIndicator,
+              );
+            }
+
+            final data = currentData ?? snapshot.requireData;
             return _DetailBody(
-              comic: widget.initialComic,
+              comic: data.comic,
               providerName: _providerName,
-              chapters: const [],
+              chapters: data.chapters,
               refreshIndicatorKey: _refreshIndicatorKey,
               onRefresh: _refreshDetail,
-              isLoading: true,
+              onChapterSelected: (_, index) =>
+                  _openReader(data.comic, data.chapters, index),
             );
-          }
-
-          if (snapshot.hasError && currentData == null) {
-            return _ErrorView(
-              message: snapshot.error.toString(),
-              onRetry: _showRefreshIndicator,
-            );
-          }
-
-          final data = currentData ?? snapshot.requireData;
-          return _DetailBody(
-            comic: data.comic,
-            providerName: _providerName,
-            chapters: data.chapters,
-            refreshIndicatorKey: _refreshIndicatorKey,
-            onRefresh: _refreshDetail,
-          );
-        },
+          },
+        ),
       ),
     );
   }
@@ -174,6 +216,7 @@ class _DetailBody extends StatelessWidget {
   final List<Chapter> chapters;
   final GlobalKey<RefreshIndicatorState> refreshIndicatorKey;
   final RefreshCallback onRefresh;
+  final void Function(Chapter chapter, int index) onChapterSelected;
   final bool isLoading;
 
   const _DetailBody({
@@ -182,6 +225,7 @@ class _DetailBody extends StatelessWidget {
     required this.chapters,
     required this.refreshIndicatorKey,
     required this.onRefresh,
+    required this.onChapterSelected,
     this.isLoading = false,
   });
 
@@ -246,9 +290,12 @@ class _DetailBody extends StatelessWidget {
               ),
             )
           else
-            ...chapters.map((chapter) {
+            ...chapters.asMap().entries.map((entry) {
+              final index = entry.key;
+              final chapter = entry.value;
               return _ChapterTile(
                 title: chapters.length == 1 ? '单章节' : chapter.name,
+                onTap: () => onChapterSelected(chapter, index),
               );
             }),
           const SizedBox(height: 24),
@@ -391,8 +438,9 @@ class _DescriptionSection extends StatelessWidget {
 
 class _ChapterTile extends StatelessWidget {
   final String title;
+  final VoidCallback onTap;
 
-  const _ChapterTile({required this.title});
+  const _ChapterTile({required this.title, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -402,11 +450,7 @@ class _ChapterTile extends StatelessWidget {
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
           trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('阅读器还没接上，章节数据已加载')));
-          },
+          onTap: onTap,
         ),
         const Divider(height: 1, indent: 16, endIndent: 16),
       ],
