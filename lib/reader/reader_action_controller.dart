@@ -156,10 +156,12 @@ class ReaderActionController {
       final targetOffset = currentOffset + offset;
 
       scrollController.animateTo(
-        targetOffset.clamp(
-          scrollController.position.minScrollExtent,
-          scrollController.position.maxScrollExtent,
-        ).toDouble(),
+        targetOffset
+            .clamp(
+              scrollController.position.minScrollExtent,
+              scrollController.position.maxScrollExtent,
+            )
+            .toDouble(),
         duration: Duration(milliseconds: durationMs),
         curve: Curves.easeOutQuad,
       );
@@ -177,10 +179,12 @@ class ReaderActionController {
     final distancePercent = _autoScrollColumnDistancePercent.clamp(10, 100);
     final targetOffset =
         scrollController.offset + viewportHeight * (distancePercent / 100);
-    final clamped = targetOffset.clamp(
-      scrollController.position.minScrollExtent,
-      scrollController.position.maxScrollExtent,
-    ).toDouble();
+    final clamped = targetOffset
+        .clamp(
+          scrollController.position.minScrollExtent,
+          scrollController.position.maxScrollExtent,
+        )
+        .toDouble();
 
     if (_noAnimation) {
       scrollController.jumpTo(clamped);
@@ -206,10 +210,12 @@ class ReaderActionController {
     final targetOffset =
         scrollController.offset +
         viewportHeight * (distancePercent / 100) * direction;
-    final clamped = targetOffset.clamp(
-      scrollController.position.minScrollExtent,
-      scrollController.position.maxScrollExtent,
-    ).toDouble();
+    final clamped = targetOffset
+        .clamp(
+          scrollController.position.minScrollExtent,
+          scrollController.position.maxScrollExtent,
+        )
+        .toDouble();
 
     if (_noAnimation) {
       scrollController.jumpTo(clamped);

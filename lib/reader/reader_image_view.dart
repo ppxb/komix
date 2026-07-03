@@ -78,10 +78,7 @@ class _ReaderImageViewState extends State<ReaderImageView> {
     final stream = provider.resolve(createLocalImageConfiguration(context));
     final listener = ImageStreamListener((info, _) {
       widget.onSizeResolved(
-        Size(
-          info.image.width.toDouble(),
-          info.image.height.toDouble(),
-        ),
+        Size(info.image.width.toDouble(), info.image.height.toDouble()),
       );
     });
 
@@ -154,10 +151,7 @@ class _ReaderImageErrorView extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;
 
-  const _ReaderImageErrorView({
-    required this.message,
-    required this.onRetry,
-  });
+  const _ReaderImageErrorView({required this.message, required this.onRetry});
 
   @override
   Widget build(BuildContext context) {

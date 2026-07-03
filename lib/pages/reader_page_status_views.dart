@@ -37,16 +37,6 @@ class _ReaderEmptyView extends StatelessWidget {
   }
 }
 
-class _ReaderChapterData {
-  final ReaderChapterSnapshot snapshot;
-  final Map<int, Size> persistedSizes;
-
-  const _ReaderChapterData({
-    required this.snapshot,
-    required this.persistedSizes,
-  });
-}
-
 class _ReaderErrorView extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;

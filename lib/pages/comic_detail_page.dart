@@ -127,10 +127,11 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
       if (!mounted) return;
       _showPendingMessage(error.toString());
     } finally {
-      if (!mounted) return;
-      setState(() {
-        _isFavoriteLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isFavoriteLoading = false;
+        });
+      }
     }
   }
 
@@ -154,10 +155,11 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
       if (!mounted) return;
       _showPendingMessage(error.toString());
     } finally {
-      if (!mounted) return;
-      setState(() {
-        _isDownloadLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isDownloadLoading = false;
+        });
+      }
     }
   }
 
@@ -169,52 +171,59 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
   }) {
     if (chapters.isEmpty) return;
 
-    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-      statusBarColor: Colors.black,
-      systemNavigationBarColor: Colors.black,
-      statusBarIconBrightness: Brightness.light,
-      statusBarBrightness: Brightness.dark,
-      systemNavigationBarIconBrightness: Brightness.light,
-    ));
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.black,
+        systemNavigationBarColor: Colors.black,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+        systemNavigationBarIconBrightness: Brightness.light,
+      ),
+    );
 
-    Navigator.of(context).push(
-      PageRouteBuilder(
-        transitionDuration: Duration.zero,
-        reverseTransitionDuration: Duration.zero,
-        pageBuilder: (context, animation, secondaryAnimation) {
-          return ColoredBox(
-            color: Colors.black,
-            child: ReaderPage(
-              providerId: widget.providerId,
-              comic: comic,
-              chapters: chapters,
-              initialChapterIndex: chapterIndex,
-              initialPageIndex: initialPageIndex,
+    Navigator.of(context)
+        .push(
+          PageRouteBuilder(
+            transitionDuration: Duration.zero,
+            reverseTransitionDuration: Duration.zero,
+            pageBuilder: (context, animation, secondaryAnimation) {
+              return ColoredBox(
+                color: Colors.black,
+                child: ReaderPage(
+                  providerId: widget.providerId,
+                  comic: comic,
+                  chapters: chapters,
+                  initialChapterIndex: chapterIndex,
+                  initialPageIndex: initialPageIndex,
+                ),
+              );
+            },
+          ),
+        )
+        .then((_) {
+          if (!mounted) return;
+          setState(() {
+            _progressFuture = _loadProgress();
+          });
+          final theme = Theme.of(context);
+          final appBarBackground = _isAppBarOpaque
+              ? theme.colorScheme.surface
+              : Colors.transparent;
+          SystemChrome.setSystemUIOverlayStyle(
+            SystemUiOverlayStyle(
+              statusBarColor: appBarBackground,
+              statusBarIconBrightness: theme.brightness == Brightness.dark
+                  ? Brightness.light
+                  : Brightness.dark,
+              statusBarBrightness: theme.brightness,
+              systemNavigationBarColor: theme.colorScheme.surface,
+              systemNavigationBarIconBrightness:
+                  theme.brightness == Brightness.dark
+                  ? Brightness.light
+                  : Brightness.dark,
             ),
           );
-        },
-      ),
-    ).then((_) {
-      if (!mounted) return;
-      setState(() {
-        _progressFuture = _loadProgress();
-      });
-      final theme = Theme.of(context);
-      final appBarBackground = _isAppBarOpaque
-          ? theme.colorScheme.surface
-          : Colors.transparent;
-      SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-        statusBarColor: appBarBackground,
-        statusBarIconBrightness: theme.brightness == Brightness.dark
-            ? Brightness.light
-            : Brightness.dark,
-        statusBarBrightness: theme.brightness,
-        systemNavigationBarColor: theme.colorScheme.surface,
-        systemNavigationBarIconBrightness: theme.brightness == Brightness.dark
-            ? Brightness.light
-            : Brightness.dark,
-      ));
-    });
+        });
   }
 
   void _openReaderFromProgress(
@@ -347,7 +356,7 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
                 chapters: const [],
                 refreshIndicatorKey: _refreshIndicatorKey,
                 onRefresh: _refreshDetail,
-                onChapterSelected: (_, __) {},
+                onChapterSelected: (_, _) {},
                 isLoading: true,
               );
             }
@@ -383,7 +392,7 @@ class _StartReadingFab extends StatelessWidget {
   final Future<ReadingProgress?> progressFuture;
   final bool isExtended;
   final void Function(_ComicDetailData data, ReadingProgress? progress)
-      onStartReading;
+  onStartReading;
 
   const _StartReadingFab({
     required this.detailFuture,
@@ -407,18 +416,23 @@ class _StartReadingFab extends StatelessWidget {
           future: progressFuture,
           builder: (context, progressSnapshot) {
             final progress = progressSnapshot.data;
-            final hasProgress = progress != null && progress.canContinue;
+            final hasProgress = switch (progress) {
+              ReadingProgress(canContinue: true) => true,
+              _ => false,
+            };
             final isProgressLoading =
                 progressSnapshot.connectionState == ConnectionState.waiting &&
                 !progressSnapshot.hasData;
+            VoidCallback? onPressed;
+            if (hasChapters && !isProgressLoading) {
+              onPressed = () => onStartReading(data, progress);
+            }
 
             return FloatingActionButton.extended(
               heroTag: null,
               isExtended: isExtended,
               tooltip: hasProgress ? '继续阅读' : '开始阅读',
-              onPressed: hasChapters && !isProgressLoading
-                  ? () => onStartReading(data!, progress)
-                  : null,
+              onPressed: onPressed,
               icon: Icon(
                 hasProgress ? Icons.history_rounded : Icons.play_arrow,
               ),

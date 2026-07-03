@@ -141,7 +141,8 @@ class _TapModeSection extends StatelessWidget {
         children: [
           _ChoicePill(
             label: '全屏下一页',
-            selected: setting.tapPageTurnMode == ReaderTapPageTurnMode.fullScreen,
+            selected:
+                setting.tapPageTurnMode == ReaderTapPageTurnMode.fullScreen,
             onTap: () {
               cubit.updateReadSetting(
                 (current) => current.copyWith(
@@ -163,7 +164,8 @@ class _TapModeSection extends StatelessWidget {
           ),
           _ChoicePill(
             label: '右手',
-            selected: setting.tapPageTurnMode == ReaderTapPageTurnMode.rightHand,
+            selected:
+                setting.tapPageTurnMode == ReaderTapPageTurnMode.rightHand,
             onTap: () {
               cubit.updateReadSetting(
                 (current) => current.copyWith(
@@ -205,7 +207,8 @@ class _BackgroundSection extends StatelessWidget {
           ),
           _ChoicePill(
             label: '黑色',
-            selected: setting.readerBackgroundMode == ReaderBackgroundMode.black,
+            selected:
+                setting.readerBackgroundMode == ReaderBackgroundMode.black,
             onTap: () {
               cubit.updateReadSetting(
                 (current) => current.copyWith(
@@ -216,7 +219,8 @@ class _BackgroundSection extends StatelessWidget {
           ),
           _ChoicePill(
             label: '白色',
-            selected: setting.readerBackgroundMode == ReaderBackgroundMode.white,
+            selected:
+                setting.readerBackgroundMode == ReaderBackgroundMode.white,
             onTap: () {
               cubit.updateReadSetting(
                 (current) => current.copyWith(
@@ -336,9 +340,7 @@ class _LayoutSection extends StatelessWidget {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('双页阅读'),
-            subtitle: Text(
-              isCompact ? '手机小屏已禁用' : '大屏横向阅读时并排显示两页',
-            ),
+            subtitle: Text(isCompact ? '手机小屏已禁用' : '大屏横向阅读时并排显示两页'),
             value: doublePageValue,
             onChanged: isCompact
                 ? null
@@ -518,9 +520,7 @@ class _AutoScrollSection extends StatelessWidget {
             ),
             _SliderRow(
               label: '分页间隔',
-              value: setting.autoScrollPageIntervalMs
-                  .clamp(800, 10000)
-                  .toInt(),
+              value: setting.autoScrollPageIntervalMs.clamp(800, 10000).toInt(),
               min: 800,
               max: 10000,
               divisions: 46,
@@ -637,8 +637,7 @@ class _PageInfoSection extends StatelessWidget {
               value: setting.pageInfoTopInStatusBar,
               onChanged: (value) {
                 cubit.updateReadSetting(
-                  (current) =>
-                      current.copyWith(pageInfoTopInStatusBar: value),
+                  (current) => current.copyWith(pageInfoTopInStatusBar: value),
                 );
               },
             ),
@@ -751,9 +750,9 @@ class _SettingsSection extends StatelessWidget {
       children: [
         Text(
           title,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w700,
-          ),
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 10),
         child,
@@ -825,10 +824,7 @@ class _SliderRow extends StatelessWidget {
         ),
         SizedBox(
           width: 64,
-          child: Text(
-            '$value$suffix',
-            textAlign: TextAlign.end,
-          ),
+          child: Text('$value$suffix', textAlign: TextAlign.end),
         ),
       ],
     );

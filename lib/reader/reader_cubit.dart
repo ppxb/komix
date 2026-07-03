@@ -38,13 +38,13 @@ class ReaderState extends Equatable {
 
   @override
   List<Object?> get props => [
-        pageIndex,
-        totalSlots,
-        isMenuVisible,
-        sliderValue,
-        isSliderRolling,
-        isComicRolling,
-      ];
+    pageIndex,
+    totalSlots,
+    isMenuVisible,
+    sliderValue,
+    isSliderRolling,
+    isComicRolling,
+  ];
 }
 
 class ReaderCubit extends Cubit<ReaderState> {

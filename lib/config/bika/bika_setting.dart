@@ -62,8 +62,6 @@ class BikaSettingState {
 
   static Map<String, bool> _boolMap(dynamic value) {
     if (value is! Map) return const <String, bool>{};
-    return value.map(
-      (key, value) => MapEntry(key.toString(), value == true),
-    );
+    return value.map((key, value) => MapEntry(key.toString(), value == true));
   }
 }

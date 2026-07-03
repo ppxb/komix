@@ -274,10 +274,8 @@ class _SearchPageState extends State<SearchPage> {
         onTap: () {
           Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (_) => ComicDetailPage(
-                providerId: providerId,
-                initialComic: comic,
-              ),
+              builder: (_) =>
+                  ComicDetailPage(providerId: providerId, initialComic: comic),
             ),
           );
         },

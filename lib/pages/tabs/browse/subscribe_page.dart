@@ -193,10 +193,8 @@ class _SubscribePageState extends State<SubscribePage>
         onTap: () {
           Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (_) => ComicDetailPage(
-                providerId: providerId,
-                initialComic: comic,
-              ),
+              builder: (_) =>
+                  ComicDetailPage(providerId: providerId, initialComic: comic),
             ),
           );
         },

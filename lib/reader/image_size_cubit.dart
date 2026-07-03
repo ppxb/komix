@@ -150,8 +150,7 @@ class ImageSizeCubit extends Cubit<ImageSizeState> {
     }
   }
 
-  Future<({int recordCount, int fileBytes, String filePath})>
-  getCacheStats() {
+  Future<({int recordCount, int fileBytes, String filePath})> getCacheStats() {
     return _cacheStore.getStats();
   }
 

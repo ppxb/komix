@@ -42,7 +42,7 @@ class _ReaderColumnImageList extends StatelessWidget {
     );
     final listView = ListView.builder(
       controller: controller,
-      cacheExtent: MediaQuery.sizeOf(context).height * 2,
+      scrollCacheExtent: const ScrollCacheExtent.viewport(2),
       padding: const EdgeInsets.only(bottom: 16),
       itemCount: slotCount,
       itemBuilder: (context, index) {

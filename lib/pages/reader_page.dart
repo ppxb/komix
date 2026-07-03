@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:ui';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:scrollview_observer/scrollview_observer.dart';
@@ -10,9 +10,8 @@ import 'package:scrollview_observer/scrollview_observer.dart';
 import '../config/global/global_setting.dart';
 import '../models/comic.dart';
 import '../models/reader_snapshot.dart';
-import '../providers/provider_registry.dart';
-import '../reader/image_size_cache_store.dart';
 import '../reader/image_size_cubit.dart';
+import '../reader/reader_chapter_view_state.dart';
 import '../reader/reader_action_controller.dart';
 import '../reader/reader_cubit.dart';
 import '../reader/reader_gesture_logic.dart';
@@ -22,8 +21,9 @@ import '../reader/reader_image_view.dart';
 import '../reader/reader_layout.dart';
 import '../reader/reader_page_info_overlay.dart';
 import '../reader/reader_keyboard_shortcuts.dart';
+import '../reader/reader_session_controller.dart';
 import '../reader/reader_settings_sheet.dart';
-import '../reader/reader_volume_controller.dart';
+import '../reader/reader_side_effect_controller.dart';
 
 part 'reader_page_content.dart';
 part 'reader_page_overlays.dart';
@@ -36,13 +36,6 @@ const _readerSystemOverlayStyle = SystemUiOverlayStyle(
   statusBarBrightness: Brightness.dark,
   systemNavigationBarIconBrightness: Brightness.light,
 );
-
-typedef ReaderChapterSnapshotLoader =
-    Future<ReaderChapterSnapshot> Function({
-      required Comic comic,
-      required Chapter chapter,
-      required List<Chapter> chapters,
-    });
 
 class ReaderPage extends StatefulWidget {
   final String providerId;
@@ -72,42 +65,42 @@ class _ReaderPageState extends State<ReaderPage> {
   static const _chapterEndPageIndex = 0x3fffffff;
 
   late int _chapterIndex;
-  late Future<_ReaderChapterData> _chapterFuture;
+  late Future<ReaderChapterData> _chapterFuture;
   late final ReaderCubit _readerCubit;
   late final ListObserverController _observerController;
   late final PageController _pageController;
   late final TransformationController _transformationController;
   late final FocusNode _readerFocusNode;
   late final ReaderActionController _actionController;
-  late final ReaderVolumeController _volumeController;
   late final ReaderHistoryManager _historyManager;
+  late final ReaderSessionController _sessionController;
+  late final ReaderSideEffectController _sideEffects;
+  final ReaderChapterViewState _chapterView = ReaderChapterViewState();
   final ScrollController _scrollController = ScrollController();
-  ImageSizeCubit? _imageSizeCubit;
-  List<GlobalKey> _pageKeys = const [];
-  List<GlobalKey> _slotKeys = const [];
-  List<String> _pageSizeKeys = const [];
-  ReaderChapterSnapshot? _chapterSnapshot;
-  List<ReaderPageImage> _chapterPages = const [];
-  final Map<int, Future<_ReaderChapterData>> _prefetchedChapterData = {};
   Timer? _progressSaveTimer;
   Timer? _pageCorrectionTimer;
-  Timer? _autoReadTimer;
-  Timer? _einkDelayTimer;
-  int? _autoReadIntervalMs;
   bool _isSeeking = false;
   bool _isMenuVisible = false;
-  bool _isAutoReadPaused = false;
-  bool _lastAutoScrollEnabled = false;
-  bool _showEinkMask = false;
   double _currentViewerScale = 1.0;
   int _pageIndex = 0;
   int _initialPageIndex = 0;
   bool _shouldRestoreInitialPage = false;
   bool _isRestoringInitialPage = false;
   bool _isRestoreScheduled = false;
+  bool _isChapterDataApplyScheduled = false;
+  bool _isReaderMetricsSyncScheduled = false;
+  ReaderChapterData? _pendingChapterData;
+  ReadSettingState? _pendingChapterReadSetting;
+  ReadSettingState? _pendingMetricsReadSetting;
   int _restoreAttempts = 0;
   TapDownDetails? _tapDownDetails;
   TapDownDetails? _doubleTapDownDetails;
+
+  ImageSizeCubit? get _imageSizeCubit => _chapterView.imageSizeCubit;
+  List<GlobalKey> get _pageKeys => _chapterView.pageKeys;
+  List<GlobalKey> get _slotKeys => _chapterView.slotKeys;
+  ReaderChapterSnapshot? get _chapterSnapshot => _chapterView.snapshot;
+  List<ReaderPageImage> get _chapterPages => _chapterView.pages;
 
   @override
   void initState() {
@@ -129,10 +122,17 @@ class _ReaderPageState extends State<ReaderPage> {
       onBeforeTurnPage: _restoreScaleBeforeTurnPage,
       onChapterBoundary: _handleChapterBoundary,
     );
-    _volumeController = ReaderVolumeController(
+    _sideEffects = ReaderSideEffectController(
       actionController: _actionController,
+      isMounted: () => mounted,
+      isMenuVisible: () => _isMenuVisible,
+      isSeeking: () => _isSeeking,
+      slotCount: () => _slotCount,
+      requestRebuild: () {
+        if (mounted) setState(() {});
+      },
     );
-    _volumeController.listen();
+    _sideEffects.listenVolume();
     _historyManager = ReaderHistoryManager(
       providerId: widget.providerId,
       comic: widget.comic,
@@ -147,8 +147,15 @@ class _ReaderPageState extends State<ReaderPage> {
       getPageIndex: () => _pageIndex,
       getPageCount: () => _slotCount,
     );
+    _sessionController = ReaderSessionController(
+      providerId: widget.providerId,
+      comic: widget.comic,
+      chapters: widget.chapters,
+      snapshotLoader: widget.snapshotLoader,
+      onLoadStarted: _historyManager.markLoading,
+    );
     unawaited(_historyManager.init());
-    _chapterFuture = _loadChapter(_chapterIndex);
+    _chapterFuture = _sessionController.loadChapter(_chapterIndex);
     _initialPageIndex = widget.initialPageIndex < 0
         ? 0
         : widget.initialPageIndex;
@@ -157,36 +164,31 @@ class _ReaderPageState extends State<ReaderPage> {
     _shouldRestoreInitialPage = _initialPageIndex > 0;
     _isRestoringInitialPage = _shouldRestoreInitialPage;
     _scrollController.addListener(_handleScrollChanged);
-    _applySystemUiVisibility(false);
+    _sideEffects.applySystemUiVisibility(false, _readerSystemOverlayStyle);
   }
 
   @override
   void dispose() {
     _progressSaveTimer?.cancel();
     _pageCorrectionTimer?.cancel();
-    _autoReadTimer?.cancel();
-    _einkDelayTimer?.cancel();
-    _prefetchedChapterData.clear();
+    _sessionController.clearPrefetch();
     unawaited(_saveProgressNow());
-    SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.manual,
-      overlays: [SystemUiOverlay.top, SystemUiOverlay.bottom],
-    );
+    _sideEffects.restoreSystemUi();
     _scrollController.removeListener(_handleScrollChanged);
     _scrollController.dispose();
     _pageController.dispose();
     _transformationController.dispose();
     _readerFocusNode.dispose();
-    _volumeController.dispose();
+    _sideEffects.dispose();
     _historyManager.stop();
-    unawaited(_imageSizeCubit?.close());
+    unawaited(_chapterView.close());
     unawaited(_readerCubit.close());
     super.dispose();
   }
 
   void _setMenuVisible(bool visible) {
     if (_isMenuVisible == visible) {
-      _applySystemUiVisibility(visible);
+      _sideEffects.applySystemUiVisibility(visible, _readerSystemOverlayStyle);
       return;
     }
 
@@ -195,118 +197,20 @@ class _ReaderPageState extends State<ReaderPage> {
     });
     _readerCubit.updateMenuVisible(visible: visible);
 
-    _applySystemUiVisibility(visible);
-    _syncAutoRead(context.read<GlobalSettingCubit>().state.readSetting);
-    _syncVolumeKeyInterception(
+    _sideEffects.applySystemUiVisibility(visible, _readerSystemOverlayStyle);
+    _sideEffects.syncReadSetting(
       context.read<GlobalSettingCubit>().state.readSetting,
     );
-  }
-
-  void _applySystemUiVisibility(bool visible) {
-    SystemChrome.setSystemUIOverlayStyle(_readerSystemOverlayStyle);
-    if (visible) {
-      SystemChrome.setEnabledSystemUIMode(
-        SystemUiMode.manual,
-        overlays: [SystemUiOverlay.top, SystemUiOverlay.bottom],
-      );
-    } else {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    }
   }
 
   void _toggleMenu() {
     _setMenuVisible(!_isMenuVisible);
   }
 
-  void _stopAutoRead() {
-    _autoReadTimer?.cancel();
-    _autoReadTimer = null;
-    _autoReadIntervalMs = null;
-  }
-
-  void _syncAutoRead(ReadSettingState readSetting) {
-    final autoScrollEnabled = readSetting.autoScroll;
-    if (!autoScrollEnabled) {
-      _lastAutoScrollEnabled = false;
-      _isAutoReadPaused = false;
-      _stopAutoRead();
-      return;
-    }
-
-    if (!_lastAutoScrollEnabled) {
-      _isAutoReadPaused = false;
-    }
-    _lastAutoScrollEnabled = true;
-
-    final intervalMs = isColumnReadMode(readSetting.readMode)
-        ? readSetting.autoScrollColumnIntervalMs.clamp(300, 5000)
-        : readSetting.autoScrollPageIntervalMs.clamp(800, 10000);
-    final intervalMsInt = intervalMs.toInt();
-    final shouldRun =
-        !_isAutoReadPaused &&
-        !_isMenuVisible &&
-        !_isSeeking &&
-        _slotCount > 0;
-
-    if (!shouldRun) {
-      _stopAutoRead();
-      return;
-    }
-
-    if (_autoReadTimer != null && _autoReadIntervalMs == intervalMsInt) {
-      return;
-    }
-
-    _autoReadTimer?.cancel();
-    _autoReadIntervalMs = intervalMsInt;
-    _autoReadTimer = Timer.periodic(Duration(milliseconds: intervalMsInt), (_) {
-      if (!mounted || _isMenuVisible || _isSeeking) return;
-      _actionController.onAutoReadTick();
-    });
-  }
-
   void _toggleAutoReadPaused() {
-    setState(() {
-      _isAutoReadPaused = !_isAutoReadPaused;
-    });
-    _syncAutoRead(context.read<GlobalSettingCubit>().state.readSetting);
-  }
-
-  void _syncVolumeKeyInterception(ReadSettingState readSetting) {
-    if (readSetting.volumeKeyPageTurn && !_isMenuVisible) {
-      _volumeController.enableInterception();
-    } else {
-      _volumeController.disableInterception();
-    }
-  }
-
-  void _hideEinkMask() {
-    _einkDelayTimer?.cancel();
-    _einkDelayTimer = null;
-    if (_showEinkMask && mounted) {
-      setState(() {
-        _showEinkMask = false;
-      });
-    }
-  }
-
-  void _triggerEinkDelay(ReadSettingState readSetting) {
-    if (isColumnReadMode(readSetting.readMode) || !readSetting.einkOptimization) {
-      _hideEinkMask();
-      return;
-    }
-
-    final delayMs = readSetting.einkDelayMs.clamp(50, 500).toInt();
-    _einkDelayTimer?.cancel();
-    setState(() {
-      _showEinkMask = true;
-    });
-    _einkDelayTimer = Timer(Duration(milliseconds: delayMs), () {
-      if (!mounted) return;
-      setState(() {
-        _showEinkMask = false;
-      });
-    });
+    _sideEffects.toggleAutoReadPaused(
+      context.read<GlobalSettingCubit>().state.readSetting,
+    );
   }
 
   void _updateViewerScale() {
@@ -396,11 +300,13 @@ class _ReaderPageState extends State<ReaderPage> {
     final localPosition = renderObject.globalToLocal(details.globalPosition);
     const targetScale = 2.5;
     final matrix = Matrix4.identity()
-      ..translate(
+      ..translateByDouble(
         renderObject.size.width / 2 - localPosition.dx * targetScale,
         renderObject.size.height / 2 - localPosition.dy * targetScale,
+        0,
+        1,
       )
-      ..scale(targetScale);
+      ..scaleByDouble(targetScale, targetScale, targetScale, 1);
 
     _transformationController.value = matrix;
     _doubleTapDownDetails = null;
@@ -544,54 +450,112 @@ class _ReaderPageState extends State<ReaderPage> {
     ReaderChapterSnapshot snapshot,
     Map<int, Size> persistedSizes,
   ) {
-    final oldKeys = _chapterPages
-        .map((page) => page.cacheKey)
-        .toList(growable: false);
-    final newKeys = snapshot.pages
-        .map((page) => page.cacheKey)
-        .toList(growable: false);
-    if (_chapterSnapshot?.chapter.id == snapshot.chapter.id &&
-        listEquals(oldKeys, newKeys)) {
-      return false;
-    }
+    final snapshotChanged = _chapterView.applySnapshot(
+      nextSnapshot: snapshot,
+      persistedSizes: persistedSizes,
+      sourceTag: widget.providerId,
+      defaultWidth: _readerContentWidth(),
+      defaultAspectRatio: _estimatedPageAspectRatio,
+    );
+    if (!snapshotChanged) return false;
 
-    _chapterSnapshot = snapshot;
-    _chapterPages = snapshot.pages;
-    _pageSizeKeys = _buildPageSizeKeys(snapshot);
-    _pageKeys = List<GlobalKey>.generate(
-      snapshot.pages.length,
-      (_) => GlobalKey(),
-      growable: false,
-    );
-    _slotKeys = List<GlobalKey>.generate(
-      snapshot.pages.length,
-      (_) => GlobalKey(),
-      growable: false,
-    );
     _pageIndex = _pageIndex.clamp(0, _lastPageIndex).toInt();
     _initialPageIndex = _initialPageIndex.clamp(0, _lastPageIndex).toInt();
-
-    final oldCubit = _imageSizeCubit;
-    final pageWidth = _readerContentWidth();
-    _imageSizeCubit = ImageSizeCubit.create(
-      defaultWidth: pageWidth > 0 ? pageWidth : 1,
-      count: snapshot.pages.length,
-      sourceTag: widget.providerId,
-      pageKeys: _pageSizeKeys,
-      defaultAspectRatio: _estimatedPageAspectRatio,
-      persistedCache: persistedSizes,
-    );
-    unawaited(oldCubit?.close());
     return true;
   }
 
-  List<String> _buildPageSizeKeys(ReaderChapterSnapshot snapshot) {
-    return snapshot.pages
-        .map(
-          (page) =>
-              '${snapshot.providerId}|${snapshot.comic.id}|${snapshot.chapter.id}|${page.cacheKey}',
-        )
-        .toList(growable: false);
+  bool _isCurrentChapterSnapshot(ReaderChapterSnapshot snapshot) {
+    if (widget.chapters.isEmpty) return false;
+    return snapshot.chapter.id == widget.chapters[_chapterIndex].id;
+  }
+
+  bool _isChapterDataApplied(ReaderChapterData data) {
+    return _chapterView.isApplied(data.snapshot);
+  }
+
+  void _scheduleChapterDataApply(
+    ReaderChapterData data,
+    ReadSettingState readSetting,
+  ) {
+    _pendingChapterData = data;
+    _pendingChapterReadSetting = readSetting;
+    if (_isChapterDataApplyScheduled) return;
+
+    _isChapterDataApplyScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _isChapterDataApplyScheduled = false;
+      final pendingData = _pendingChapterData;
+      final pendingReadSetting = _pendingChapterReadSetting;
+      _pendingChapterData = null;
+      _pendingChapterReadSetting = null;
+      if (!mounted || pendingData == null || pendingReadSetting == null) {
+        return;
+      }
+      _applyChapterData(pendingData, pendingReadSetting);
+    });
+  }
+
+  void _applyChapterData(ReaderChapterData data, ReadSettingState readSetting) {
+    final chapterSnapshot = data.snapshot;
+    if (!_isCurrentChapterSnapshot(chapterSnapshot)) return;
+
+    final snapshotChanged = _syncChapterSnapshot(
+      chapterSnapshot,
+      data.persistedSizes,
+    );
+    _historyManager.markLoaded();
+    _sessionController.prefetchAdjacentChapters(_chapterIndex);
+    final pageIndexChanged = _syncReaderMetrics(readSetting);
+    if (snapshotChanged && !pageIndexChanged && mounted) {
+      setState(() {});
+    }
+    if (snapshotChanged) {
+      unawaited(_saveProgressNow());
+    }
+    _sideEffects.syncReadSetting(readSetting);
+    _scheduleInitialPageRestore();
+  }
+
+  void _scheduleReaderMetricsSync(ReadSettingState readSetting) {
+    _pendingMetricsReadSetting = readSetting;
+    if (_isReaderMetricsSyncScheduled) return;
+
+    _isReaderMetricsSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _isReaderMetricsSyncScheduled = false;
+      final pendingReadSetting = _pendingMetricsReadSetting;
+      _pendingMetricsReadSetting = null;
+      if (!mounted || pendingReadSetting == null) return;
+      _syncReaderMetrics(pendingReadSetting);
+    });
+  }
+
+  bool _syncReaderMetrics(ReadSettingState readSetting) {
+    final slotCount = _slotCountFor(readSetting);
+    final maxSlot = slotCount > 0 ? slotCount - 1 : 0;
+    final safePageIndex = _pageIndex.clamp(0, maxSlot).toInt();
+    final pageIndexChanged = safePageIndex != _pageIndex;
+    if (pageIndexChanged) {
+      if (mounted) {
+        setState(() {
+          _pageIndex = safePageIndex;
+        });
+      } else {
+        _pageIndex = safePageIndex;
+      }
+    }
+    _readerCubit.updateTotalSlots(slotCount);
+    _readerCubit.updatePageIndex(safePageIndex);
+    return pageIndexChanged;
+  }
+
+  void _handleReadSettingChanged(ReadSettingState readSetting) {
+    if (!readSetting.doubleTapZoom &&
+        _currentViewerScale > _scaleLockThreshold) {
+      _resetViewerTransformIfNeeded();
+    }
+    _syncReaderMetrics(readSetting);
+    _sideEffects.syncReadSetting(readSetting);
   }
 
   void _handleImageSizeResolved(int index, Size size) {
@@ -619,17 +583,14 @@ class _ReaderPageState extends State<ReaderPage> {
     if (!isColumnReadMode(readSetting.readMode)) {
       if (!_pageController.hasClients) return;
       _pageController.jumpToPage(targetPage);
-      _triggerEinkDelay(readSetting);
+      _sideEffects.triggerEinkDelay(readSetting);
       return;
     }
 
     _jumpToColumnPage(targetPage, correctAfterLayout: correctAfterLayout);
   }
 
-  void _jumpToColumnPage(
-    int targetPage, {
-    required bool correctAfterLayout,
-  }) {
+  void _jumpToColumnPage(int targetPage, {required bool correctAfterLayout}) {
     if (!_scrollController.hasClients) return;
     if (_jumpToBuiltColumnSlot(targetPage)) {
       if (correctAfterLayout) {
@@ -818,7 +779,7 @@ class _ReaderPageState extends State<ReaderPage> {
   void _handleProgressChangeStart(double value) {
     _progressSaveTimer?.cancel();
     _pageCorrectionTimer?.cancel();
-    _stopAutoRead();
+    _sideEffects.stopAutoRead();
     _isSeeking = true;
     _readerCubit.updateSliderRolling(true);
     _readerCubit.updateIsComicRolling(true);
@@ -846,102 +807,20 @@ class _ReaderPageState extends State<ReaderPage> {
     _readerCubit.updatePageIndex(pageIndex);
     _jumpToPage(pageIndex);
     unawaited(_saveProgressNow());
-    _syncAutoRead(context.read<GlobalSettingCubit>().state.readSetting);
+    _sideEffects.syncReadSetting(
+      context.read<GlobalSettingCubit>().state.readSetting,
+    );
   }
 
   String _chapterTitle(int index) {
-    if (widget.chapters.isEmpty) return '暂无章节';
-    final chapter = widget.chapters[index];
-    return widget.chapters.length == 1 ? '单章节' : chapter.name;
-  }
-
-  Future<_ReaderChapterData> _loadChapter(
-    int index, {
-    bool markHistoryLoading = true,
-  }) async {
-    if (markHistoryLoading) {
-      _historyManager.markLoading();
-    }
-    if (widget.chapters.isEmpty) {
-      throw StateError('暂无章节');
-    }
-
-    final chapter = widget.chapters[index];
-    final loader = widget.snapshotLoader;
-    final snapshot = loader != null
-        ? await loader(
-            comic: widget.comic,
-            chapter: chapter,
-            chapters: widget.chapters,
-          )
-        : await _loadProviderChapterSnapshot(chapter);
-    final pageSizeKeys = _buildPageSizeKeys(snapshot);
-    final persistedSizes = await ImageSizeCacheStore(
-      sourceTag: widget.providerId,
-      pageKeys: pageSizeKeys,
-    ).readIndexedSizes(pageKeys: pageSizeKeys, count: snapshot.pages.length);
-    return _ReaderChapterData(
-      snapshot: snapshot,
-      persistedSizes: persistedSizes,
-    );
-  }
-
-  Future<_ReaderChapterData> _takeChapterFuture(int index) {
-    return _prefetchedChapterData.remove(index) ?? _loadChapter(index);
-  }
-
-  void _prefetchAdjacentChapters() {
-    if (!mounted || widget.chapters.length <= 1) return;
-
-    final keepIndexes = <int>{_chapterIndex - 1, _chapterIndex + 1};
-    _prefetchedChapterData.removeWhere(
-      (index, _) => !keepIndexes.contains(index),
-    );
-    _prefetchChapter(_chapterIndex - 1);
-    _prefetchChapter(_chapterIndex + 1);
-  }
-
-  void _prefetchChapter(int index) {
-    if (index < 0 ||
-        index >= widget.chapters.length ||
-        index == _chapterIndex ||
-        _prefetchedChapterData.containsKey(index)) {
-      return;
-    }
-
-    final future = _loadChapter(index, markHistoryLoading: false);
-    _prefetchedChapterData[index] = future;
-    unawaited(
-      future.then<void>(
-        (_) {},
-        onError: (_) {
-          if (_prefetchedChapterData[index] == future) {
-            _prefetchedChapterData.remove(index);
-          }
-        },
-      ),
-    );
-  }
-
-  Future<ReaderChapterSnapshot> _loadProviderChapterSnapshot(
-    Chapter chapter,
-  ) async {
-    final provider = ProviderRegistry().getProvider(widget.providerId);
-    if (provider == null) {
-      throw StateError('未找到数据源: ${widget.providerId}');
-    }
-    return provider.getReaderChapterSnapshot(
-      comic: widget.comic,
-      chapter: chapter,
-      chapters: widget.chapters,
-    );
+    return _sessionController.chapterTitle(index);
   }
 
   Future<void> _reloadChapter() {
-    _hideEinkMask();
+    _sideEffects.hideEinkMask();
     _resetViewerTransformIfNeeded();
-    _prefetchedChapterData.remove(_chapterIndex);
-    final future = _loadChapter(_chapterIndex);
+    _sessionController.removePrefetch(_chapterIndex);
+    final future = _sessionController.loadChapter(_chapterIndex);
     setState(() {
       _chapterFuture = future;
     });
@@ -973,25 +852,19 @@ class _ReaderPageState extends State<ReaderPage> {
     }
 
     _progressSaveTimer?.cancel();
-    _stopAutoRead();
-    _hideEinkMask();
+    _sideEffects.stopAutoRead();
+    _sideEffects.hideEinkMask();
     _resetViewerTransformIfNeeded();
     unawaited(_saveProgressNow());
     _pageCorrectionTimer?.cancel();
     _historyManager.markLoading();
-    final oldImageSizeCubit = _imageSizeCubit;
+    final oldImageSizeCubit = _chapterView.reset();
     final targetInitialPageIndex = initialPageIndex < 0 ? 0 : initialPageIndex;
     setState(() {
       _chapterIndex = index;
-      _chapterFuture = _takeChapterFuture(index);
+      _chapterFuture = _sessionController.takeChapterFuture(index);
       _pageIndex = targetInitialPageIndex;
       _initialPageIndex = targetInitialPageIndex;
-      _chapterSnapshot = null;
-      _chapterPages = const [];
-      _pageSizeKeys = const [];
-      _pageKeys = const [];
-      _slotKeys = const [];
-      _imageSizeCubit = null;
       _shouldRestoreInitialPage = targetInitialPageIndex > 0;
       _isRestoringInitialPage = targetInitialPageIndex > 0;
       _isRestoreScheduled = false;
@@ -1069,7 +942,9 @@ class _ReaderPageState extends State<ReaderPage> {
     _readerCubit.updatePageIndex(safePageIndex);
     _scheduleProgressSave();
     _resetViewerTransformIfNeeded();
-    _triggerEinkDelay(context.read<GlobalSettingCubit>().state.readSetting);
+    _sideEffects.triggerEinkDelay(
+      context.read<GlobalSettingCubit>().state.readSetting,
+    );
 
     if (_isMenuVisible) {
       _setMenuVisible(false);
@@ -1079,7 +954,7 @@ class _ReaderPageState extends State<ReaderPage> {
   void _handleReaderLayoutChanged() {
     _progressSaveTimer?.cancel();
     _pageCorrectionTimer?.cancel();
-    _hideEinkMask();
+    _sideEffects.hideEinkMask();
     _resetViewerTransformIfNeeded();
     setState(() {
       _pageIndex = 0;
@@ -1119,265 +994,230 @@ class _ReaderPageState extends State<ReaderPage> {
         .clamp(0, 100)
         .toDouble();
     final enableReaderFilter =
-        isDarkMode &&
-        readSetting.readFilterEnabled &&
-        filterOpacityPercent > 0;
+        isDarkMode && readSetting.readFilterEnabled && filterOpacityPercent > 0;
     final effectiveDoublePageEnabled = _effectiveDoublePageEnabled(
       readSetting,
       buildContext: context,
     );
     final isDoubleTapActionEnabled =
         readSetting.doubleTapOpenMenu || readSetting.doubleTapZoom;
-    if (!readSetting.doubleTapZoom &&
-        _currentViewerScale > _scaleLockThreshold) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _resetViewerTransformIfNeeded();
-        }
-      });
-    }
 
     return BlocProvider.value(
       value: _readerCubit,
-      child: AnnotatedRegion<SystemUiOverlayStyle>(
-        value: _readerSystemOverlayStyle,
-        child: Scaffold(
-          backgroundColor: backgroundColor,
-          body: Stack(
-            children: [
-              Positioned.fill(
-                child: Focus(
-                  focusNode: _readerFocusNode,
-                  autofocus: true,
-                  onKeyEvent: (node, event) {
-                    final handled = handleGlobalKeyEvent(
-                      event,
-                      _actionController,
-                    );
-                    return handled
-                        ? KeyEventResult.handled
-                        : KeyEventResult.ignored;
-                  },
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onTapDown: (details) => _tapDownDetails = details,
-                    onTap: _handleTap,
-                    onDoubleTapDown: isDoubleTapActionEnabled
-                        ? (details) => _doubleTapDownDetails = details
-                        : null,
-                    onDoubleTap: isDoubleTapActionEnabled
-                        ? _handleDoubleTap
-                        : null,
-                    child: InteractiveViewer(
-                      transformationController: _transformationController,
-                      boundaryMargin: EdgeInsets.zero,
-                      minScale: 1,
-                      maxScale: 4,
-                      panEnabled: _currentViewerScale > _scaleLockThreshold,
-                      scaleEnabled: readSetting.doubleTapZoom,
-                      interactionEndFrictionCoefficient: 0.00001,
-                      onInteractionUpdate: (_) => _updateViewerScale(),
-                      onInteractionEnd: (_) => _updateViewerScale(),
-                      child: NotificationListener<ScrollNotification>(
-                        onNotification: _handleReaderScrollNotification,
-                        child: FutureBuilder<_ReaderChapterData>(
-                        key: ValueKey(_chapterIndex),
-                        future: _chapterFuture,
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState ==
-                                  ConnectionState.waiting &&
-                              !snapshot.hasData) {
-                            return const Center(
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                              ),
-                            );
-                          }
+      child: BlocListener<GlobalSettingCubit, GlobalSettingState>(
+        listenWhen: (previous, current) =>
+            previous.readSetting != current.readSetting,
+        listener: (context, state) =>
+            _handleReadSettingChanged(state.readSetting),
+        child: AnnotatedRegion<SystemUiOverlayStyle>(
+          value: _readerSystemOverlayStyle,
+          child: Scaffold(
+            backgroundColor: backgroundColor,
+            body: Stack(
+              children: [
+                Positioned.fill(
+                  child: Focus(
+                    focusNode: _readerFocusNode,
+                    autofocus: true,
+                    onKeyEvent: (node, event) {
+                      final handled = handleGlobalKeyEvent(
+                        event,
+                        _actionController,
+                      );
+                      return handled
+                          ? KeyEventResult.handled
+                          : KeyEventResult.ignored;
+                    },
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTapDown: (details) => _tapDownDetails = details,
+                      onTap: _handleTap,
+                      onDoubleTapDown: isDoubleTapActionEnabled
+                          ? (details) => _doubleTapDownDetails = details
+                          : null,
+                      onDoubleTap: isDoubleTapActionEnabled
+                          ? _handleDoubleTap
+                          : null,
+                      child: InteractiveViewer(
+                        transformationController: _transformationController,
+                        boundaryMargin: EdgeInsets.zero,
+                        minScale: 1,
+                        maxScale: 4,
+                        panEnabled: _currentViewerScale > _scaleLockThreshold,
+                        scaleEnabled: readSetting.doubleTapZoom,
+                        interactionEndFrictionCoefficient: 0.00001,
+                        onInteractionUpdate: (_) => _updateViewerScale(),
+                        onInteractionEnd: (_) => _updateViewerScale(),
+                        child: NotificationListener<ScrollNotification>(
+                          onNotification: _handleReaderScrollNotification,
+                          child: FutureBuilder<ReaderChapterData>(
+                            key: ValueKey(_chapterIndex),
+                            future: _chapterFuture,
+                            builder: (context, snapshot) {
+                              if (snapshot.connectionState ==
+                                      ConnectionState.waiting &&
+                                  !snapshot.hasData) {
+                                return const Center(
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                  ),
+                                );
+                              }
 
-                          if (snapshot.hasError && !snapshot.hasData) {
-                            return _ReaderErrorView(
-                              message: snapshot.error.toString(),
-                              onRetry: _reloadChapter,
-                            );
-                          }
+                              if (snapshot.hasError && !snapshot.hasData) {
+                                return _ReaderErrorView(
+                                  message: snapshot.error.toString(),
+                                  onRetry: _reloadChapter,
+                                );
+                              }
 
-                          final data = snapshot.requireData;
-                          final chapterSnapshot = data.snapshot;
-                          if (chapterSnapshot.pages.isEmpty) {
-                            return _ReaderEmptyView(onRetry: _reloadChapter);
-                          }
+                              final data = snapshot.requireData;
+                              final chapterSnapshot = data.snapshot;
+                              if (chapterSnapshot.pages.isEmpty) {
+                                return _ReaderEmptyView(
+                                  onRetry: _reloadChapter,
+                                );
+                              }
 
-                          final snapshotChanged = _syncChapterSnapshot(
-                            chapterSnapshot,
-                            data.persistedSizes,
-                          );
-                          _historyManager.markLoaded();
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            if (mounted) {
-                              _prefetchAdjacentChapters();
-                            }
-                          });
-                          if (snapshotChanged) {
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (!mounted) return;
+                              if (!_isChapterDataApplied(data)) {
+                                _scheduleChapterDataApply(data, readSetting);
+                                return const Center(
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                  ),
+                                );
+                              }
+
+                              final imageSizeCubit = _imageSizeCubit;
+                              if (imageSizeCubit == null) {
+                                return const Center(
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                  ),
+                                );
+                              }
+                              final enableDoublePage =
+                                  effectiveDoublePageEnabled;
                               final slotCount = _slotCountFor(
                                 readSetting,
                                 buildContext: context,
                               );
-                              final maxSlot = slotCount > 0
-                                  ? slotCount - 1
-                                  : 0;
+                              final maxSlot = slotCount > 0 ? slotCount - 1 : 0;
                               final safePageIndex = _pageIndex
                                   .clamp(0, maxSlot)
                                   .toInt();
-                              if (safePageIndex != _pageIndex) {
-                                _pageIndex = safePageIndex;
+                              if (_readerCubit.state.totalSlots != slotCount ||
+                                  _pageIndex != safePageIndex) {
+                                _scheduleReaderMetricsSync(readSetting);
                               }
-                              _readerCubit.updateTotalSlots(slotCount);
-                              _readerCubit.updatePageIndex(safePageIndex);
-                              setState(() {});
-                              unawaited(_saveProgressNow());
-                            });
-                          }
-                          final imageSizeCubit = _imageSizeCubit;
-                          if (imageSizeCubit == null) {
-                            return const Center(
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                              ),
-                            );
-                          }
-                          final enableDoublePage = effectiveDoublePageEnabled;
-                          final slotCount = _slotCountFor(
-                            readSetting,
-                            buildContext: context,
-                          );
-                          final maxSlot = slotCount > 0 ? slotCount - 1 : 0;
-                          final safePageIndex = _pageIndex
-                              .clamp(0, maxSlot)
-                              .toInt();
-                          if (_readerCubit.state.totalSlots != slotCount ||
-                              _pageIndex != safePageIndex) {
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (!mounted) return;
-                              if (_pageIndex != safePageIndex) {
-                                setState(() {
-                                  _pageIndex = safePageIndex;
-                                });
-                              }
-                              _readerCubit.updateTotalSlots(slotCount);
-                              _readerCubit.updatePageIndex(safePageIndex);
-                            });
-                          }
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            if (mounted) {
-                              _syncAutoRead(readSetting);
-                              _syncVolumeKeyInterception(readSetting);
-                            }
-                          });
-                          _scheduleInitialPageRestore();
-                          return BlocProvider.value(
-                            value: imageSizeCubit,
-                            child: isColumnReadMode(readSetting.readMode)
-                                ? _ReaderColumnImageList(
-                                    pageKeys: _pageKeys,
-                                    slotKeys: _slotKeys,
-                                    providerId: chapterSnapshot.providerId,
-                                    comicId: chapterSnapshot.comic.id,
-                                    chapterId: chapterSnapshot.chapter.id,
-                                    pages: chapterSnapshot.pages,
-                                    controller: _scrollController,
-                                    observerController: _observerController,
-                                    enableDoublePage: enableDoublePage,
-                                    isRtl: isReverseRowReadMode(
-                                      readSetting.readMode,
-                                    ),
-                                    backgroundColor: backgroundColor,
-                                    onPageObserved: _handleObservedPageIndex,
-                                    onSizeResolved: _handleImageSizeResolved,
-                                  )
-                                : _ReaderRowImagePager(
-                                    pageKeys: _pageKeys,
-                                    providerId: chapterSnapshot.providerId,
-                                    comicId: chapterSnapshot.comic.id,
-                                    chapterId: chapterSnapshot.chapter.id,
-                                    pages: chapterSnapshot.pages,
-                                    controller: _pageController,
-                                    enableDoublePage: enableDoublePage,
-                                    isRtl: isReverseRowReadMode(
-                                      readSetting.readMode,
-                                    ),
-                                    backgroundColor: backgroundColor,
-                                    onPageChanged: _handlePagedPageChanged,
-                                    onSizeResolved: _handleImageSizeResolved,
-                                  ),
-                          );
-                        },
+
+                              return BlocProvider.value(
+                                value: imageSizeCubit,
+                                child: isColumnReadMode(readSetting.readMode)
+                                    ? _ReaderColumnImageList(
+                                        pageKeys: _pageKeys,
+                                        slotKeys: _slotKeys,
+                                        providerId: chapterSnapshot.providerId,
+                                        comicId: chapterSnapshot.comic.id,
+                                        chapterId: chapterSnapshot.chapter.id,
+                                        pages: chapterSnapshot.pages,
+                                        controller: _scrollController,
+                                        observerController: _observerController,
+                                        enableDoublePage: enableDoublePage,
+                                        isRtl: isReverseRowReadMode(
+                                          readSetting.readMode,
+                                        ),
+                                        backgroundColor: backgroundColor,
+                                        onPageObserved:
+                                            _handleObservedPageIndex,
+                                        onSizeResolved:
+                                            _handleImageSizeResolved,
+                                      )
+                                    : _ReaderRowImagePager(
+                                        pageKeys: _pageKeys,
+                                        providerId: chapterSnapshot.providerId,
+                                        comicId: chapterSnapshot.comic.id,
+                                        chapterId: chapterSnapshot.chapter.id,
+                                        pages: chapterSnapshot.pages,
+                                        controller: _pageController,
+                                        enableDoublePage: enableDoublePage,
+                                        isRtl: isReverseRowReadMode(
+                                          readSetting.readMode,
+                                        ),
+                                        backgroundColor: backgroundColor,
+                                        onPageChanged: _handlePagedPageChanged,
+                                        onSizeResolved:
+                                            _handleImageSizeResolved,
+                                      ),
+                              );
+                            },
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              if (enableReaderFilter)
-                Positioned.fill(
-                  child: IgnorePointer(
+                if (enableReaderFilter)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: ColoredBox(
+                        color: Colors.black.withValues(
+                          alpha: filterOpacityPercent / 100,
+                        ),
+                      ),
+                    ),
+                  ),
+                if (_sideEffects.showEinkMask)
+                  const Positioned.fill(
+                    child: IgnorePointer(
+                      child: ColoredBox(color: Colors.white),
+                    ),
+                  ),
+                if (_chapterPages.isNotEmpty)
+                  ReaderPageInfoOverlay(
+                    totalPageCount: _chapterPages.length,
+                    enableDoublePage: effectiveDoublePageEnabled,
+                  ),
+                if (_chapterPages.isNotEmpty && readSetting.autoScroll)
+                  _ReaderAutoReadButton(
+                    isMenuVisible: _isMenuVisible,
+                    isPaused: _sideEffects.isAutoReadPaused,
+                    onPressed: _toggleAutoReadPaused,
+                  ),
+                _ReaderTopBar(
+                  title: widget.comic.title,
+                  chapterTitle: _chapterTitle(_chapterIndex),
+                  isVisible: _isMenuVisible,
+                  onRefresh: _reloadChapter,
+                ),
+                _ReaderBottomOverlay(
+                  isVisible: _isMenuVisible,
+                  child: _ReaderBottomBar(
+                    chapterCount: widget.chapters.length,
+                    pageIndex: _pageIndex,
+                    pageCount: _slotCount,
+                    hasPrevious: hasPrevious,
+                    hasNext: hasNext,
+                    onProgressChangeStart: _handleProgressChangeStart,
+                    onProgressChanged: _handleProgressChanged,
+                    onProgressChangeEnd: _handleProgressChangeEnd,
+                    onPrevious: () => _goToChapter(_chapterIndex - 1),
+                    onChapterPicker: _showChapterPicker,
+                    onSettings: () => unawaited(_showReaderSettings()),
+                    onNext: () => _goToChapter(_chapterIndex + 1),
+                  ),
+                ),
+                if (_isRestoringInitialPage)
+                  const Positioned.fill(
                     child: ColoredBox(
-                      color: Colors.black.withValues(
-                        alpha: filterOpacityPercent / 100,
+                      color: Colors.black,
+                      child: Center(
+                        child: CircularProgressIndicator(color: Colors.white),
                       ),
                     ),
                   ),
-                ),
-              if (_showEinkMask)
-                const Positioned.fill(
-                  child: IgnorePointer(
-                    child: ColoredBox(color: Colors.white),
-                  ),
-                ),
-              if (_chapterPages.isNotEmpty)
-                ReaderPageInfoOverlay(
-                  totalPageCount: _chapterPages.length,
-                  enableDoublePage: effectiveDoublePageEnabled,
-                ),
-              if (_chapterPages.isNotEmpty && readSetting.autoScroll)
-                _ReaderAutoReadButton(
-                  isMenuVisible: _isMenuVisible,
-                  isPaused: _isAutoReadPaused,
-                  onPressed: _toggleAutoReadPaused,
-                ),
-              _ReaderTopBar(
-                title: widget.comic.title,
-                chapterTitle: _chapterTitle(_chapterIndex),
-                isVisible: _isMenuVisible,
-                onRefresh: _reloadChapter,
-              ),
-              _ReaderBottomOverlay(
-                isVisible: _isMenuVisible,
-                child: _ReaderBottomBar(
-                  chapterCount: widget.chapters.length,
-                  pageIndex: _pageIndex,
-                  pageCount: _slotCount,
-                  hasPrevious: hasPrevious,
-                  hasNext: hasNext,
-                  onProgressChangeStart: _handleProgressChangeStart,
-                  onProgressChanged: _handleProgressChanged,
-                  onProgressChangeEnd: _handleProgressChangeEnd,
-                  onPrevious: () => _goToChapter(_chapterIndex - 1),
-                  onChapterPicker: _showChapterPicker,
-                  onSettings: () => unawaited(_showReaderSettings()),
-                  onNext: () => _goToChapter(_chapterIndex + 1),
-                ),
-              ),
-              if (_isRestoringInitialPage)
-                const Positioned.fill(
-                  child: ColoredBox(
-                    color: Colors.black,
-                    child: Center(
-                      child: CircularProgressIndicator(color: Colors.white),
-                    ),
-                  ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

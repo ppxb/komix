@@ -9,10 +9,7 @@ class ImageSizeCacheStore {
   final String sourceTag;
   final List<String> pageKeys;
 
-  const ImageSizeCacheStore({
-    required this.sourceTag,
-    required this.pageKeys,
-  });
+  const ImageSizeCacheStore({required this.sourceTag, required this.pageKeys});
 
   Future<Map<int, Size>> readIndexedSizes({
     required List<String> pageKeys,
@@ -61,10 +58,7 @@ class ImageSizeCacheStore {
       await dir.create(recursive: true);
     }
 
-    final payload = jsonEncode({
-      'version': 1,
-      'records': records,
-    });
+    final payload = jsonEncode({'version': 1, 'records': records});
     final tmpFile = File('$filePath.tmp');
     await tmpFile.writeAsString(payload, flush: true);
     if (await file.exists()) {
@@ -73,8 +67,7 @@ class ImageSizeCacheStore {
     await tmpFile.rename(filePath);
   }
 
-  Future<({int recordCount, int fileBytes, String filePath})>
-  getStats() async {
+  Future<({int recordCount, int fileBytes, String filePath})> getStats() async {
     final filePath = await cacheFilePath();
     final file = File(filePath);
     if (!await file.exists()) {

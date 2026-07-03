@@ -50,13 +50,15 @@ class _HistoryTabState extends State<HistoryTab> {
       return;
     }
 
-    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-      statusBarColor: Colors.black,
-      systemNavigationBarColor: Colors.black,
-      statusBarIconBrightness: Brightness.light,
-      statusBarBrightness: Brightness.dark,
-      systemNavigationBarIconBrightness: Brightness.light,
-    ));
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.black,
+        systemNavigationBarColor: Colors.black,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+        systemNavigationBarIconBrightness: Brightness.light,
+      ),
+    );
 
     await Navigator.of(context).push(
       PageRouteBuilder(
@@ -73,24 +75,26 @@ class _HistoryTabState extends State<HistoryTab> {
 
     if (!mounted) return;
     final theme = Theme.of(context);
-    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: theme.brightness == Brightness.dark
-          ? Brightness.light
-          : Brightness.dark,
-      statusBarBrightness: theme.brightness,
-      systemNavigationBarColor: theme.colorScheme.surface,
-      systemNavigationBarIconBrightness: theme.brightness == Brightness.dark
-          ? Brightness.light
-          : Brightness.dark,
-    ));
+    SystemChrome.setSystemUIOverlayStyle(
+      SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: theme.brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
+        statusBarBrightness: theme.brightness,
+        systemNavigationBarColor: theme.colorScheme.surface,
+        systemNavigationBarIconBrightness: theme.brightness == Brightness.dark
+            ? Brightness.light
+            : Brightness.dark,
+      ),
+    );
     await _refreshHistory();
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -260,10 +264,7 @@ class _HistoryReaderErrorView extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;
 
-  const _HistoryReaderErrorView({
-    required this.message,
-    required this.onRetry,
-  });
+  const _HistoryReaderErrorView({required this.message, required this.onRetry});
 
   @override
   Widget build(BuildContext context) {
