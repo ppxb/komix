@@ -6,13 +6,15 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../config/global/global_setting.dart';
 import 'reader_layout.dart';
 
+typedef ReaderLayoutChanged = void Function(ReadSettingState previousSetting);
+
 bool isCompactReaderViewport(BuildContext context) {
   return MediaQuery.sizeOf(context).shortestSide < 600;
 }
 
 Future<void> showReaderSettingsSheet(
   BuildContext context, {
-  required VoidCallback onLayoutChanged,
+  required ReaderLayoutChanged onLayoutChanged,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -25,7 +27,7 @@ Future<void> showReaderSettingsSheet(
 }
 
 class _ReaderSettingsSheet extends StatelessWidget {
-  final VoidCallback onLayoutChanged;
+  final ReaderLayoutChanged onLayoutChanged;
 
   const _ReaderSettingsSheet({required this.onLayoutChanged});
 
@@ -67,7 +69,7 @@ class _ReaderSettingsSheet extends StatelessWidget {
 }
 
 class _ReadModeSection extends StatelessWidget {
-  final VoidCallback onLayoutChanged;
+  final ReaderLayoutChanged onLayoutChanged;
 
   const _ReadModeSection({required this.onLayoutChanged});
 
@@ -90,7 +92,7 @@ class _ReadModeSection extends StatelessWidget {
               cubit.updateReadSetting(
                 (current) => current.copyWith(readMode: kReadModeColumn),
               );
-              onLayoutChanged();
+              onLayoutChanged(setting);
             },
           ),
           _ChoicePill(
@@ -101,7 +103,7 @@ class _ReadModeSection extends StatelessWidget {
               cubit.updateReadSetting(
                 (current) => current.copyWith(readMode: kReadModeRowLtr),
               );
-              onLayoutChanged();
+              onLayoutChanged(setting);
             },
           ),
           _ChoicePill(
@@ -112,7 +114,7 @@ class _ReadModeSection extends StatelessWidget {
               cubit.updateReadSetting(
                 (current) => current.copyWith(readMode: kReadModeRowRtl),
               );
-              onLayoutChanged();
+              onLayoutChanged(setting);
             },
           ),
         ],
@@ -322,7 +324,7 @@ class _GestureSection extends StatelessWidget {
 }
 
 class _LayoutSection extends StatelessWidget {
-  final VoidCallback onLayoutChanged;
+  final ReaderLayoutChanged onLayoutChanged;
 
   const _LayoutSection({required this.onLayoutChanged});
 
@@ -348,7 +350,7 @@ class _LayoutSection extends StatelessWidget {
                     cubit.updateReadSetting(
                       (current) => current.copyWith(doublePageMode: value),
                     );
-                    onLayoutChanged();
+                    onLayoutChanged(setting);
                   },
           ),
           SwitchListTile(
@@ -359,7 +361,7 @@ class _LayoutSection extends StatelessWidget {
               cubit.updateReadSetting(
                 (current) => current.copyWith(sidePaddingEnabled: value),
               );
-              onLayoutChanged();
+              onLayoutChanged(setting);
             },
           ),
           if (setting.sidePaddingEnabled)
@@ -375,7 +377,7 @@ class _LayoutSection extends StatelessWidget {
                   (current) => current.copyWith(sidePaddingPercent: value),
                 );
               },
-              onChangeEnd: (_) => onLayoutChanged(),
+              onChangeEnd: (_) => onLayoutChanged(setting),
             ),
         ],
       ),

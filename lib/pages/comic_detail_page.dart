@@ -406,6 +406,10 @@ class _StartReadingFab extends StatelessWidget {
     return FutureBuilder<_ComicDetailData>(
       future: detailFuture,
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SizedBox.shrink();
+        }
+
         final data = snapshot.data;
         final hasChapters = data != null && data.chapters.isNotEmpty;
         if (snapshot.hasError || (data != null && data.chapters.isEmpty)) {
