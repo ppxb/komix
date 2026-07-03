@@ -48,6 +48,7 @@ class DownloadedComic {
   final String creator;
   final List<String> tags;
   final List<Chapter> chapters;
+  final Map<String, List<DownloadedPageImage>> pageImagesByChapterId;
   final String storageRoot;
   final DateTime downloadedAt;
 
@@ -60,6 +61,7 @@ class DownloadedComic {
     required this.creator,
     required this.tags,
     required this.chapters,
+    required this.pageImagesByChapterId,
     required this.storageRoot,
     required this.downloadedAt,
   });
@@ -79,6 +81,57 @@ class DownloadedComic {
   }
 }
 
+class DownloadedPageImage {
+  final String id;
+  final String name;
+  final String path;
+  final String url;
+  final Map<String, dynamic> extern;
+
+  const DownloadedPageImage({
+    required this.id,
+    required this.name,
+    required this.path,
+    required this.url,
+    required this.extern,
+  });
+
+  factory DownloadedPageImage.fromMap(Map<String, dynamic> map) {
+    return DownloadedPageImage(
+      id: map['id']?.toString() ?? '',
+      name: map['name']?.toString() ?? '',
+      path: map['path']?.toString() ?? '',
+      url: map['url']?.toString() ?? '',
+      extern: Map<String, dynamic>.from(
+        map['extern'] as Map? ?? const <String, dynamic>{},
+      ),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {'id': id, 'name': name, 'path': path, 'url': url, 'extern': extern};
+  }
+}
+
+class _DownloadedChapterRecord {
+  final Chapter chapter;
+  final List<DownloadedPageImage> images;
+
+  const _DownloadedChapterRecord({required this.chapter, required this.images});
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': chapter.id,
+      'name': chapter.name,
+      'order': chapter.order,
+      'comic_id': chapter.comicId,
+      'logicalKey': chapter.id,
+      'taskChapterId': chapter.id,
+      'images': images.map((image) => image.toMap()).toList(),
+    };
+  }
+}
+
 class DownloadService {
   DownloadService._();
 
@@ -87,6 +140,7 @@ class DownloadService {
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
   bool _isProcessing = false;
   final Set<int> _cancelledTaskIds = <int>{};
+  final Map<int, Completer<void>> _cancelSignals = <int, Completer<void>>{};
 
   void startProcessing() {
     _resetInterruptedTasks();
@@ -153,7 +207,8 @@ class DownloadService {
               download.providerId.isNotEmpty &&
               download.comicId.isNotEmpty &&
               download.title.isNotEmpty &&
-              download.chapters.isNotEmpty,
+              download.chapters.isNotEmpty &&
+              download.pageImagesByChapterId.isNotEmpty,
         )
         .toList();
     items.sort((a, b) => b.downloadedAt.compareTo(a.downloadedAt));
@@ -165,6 +220,7 @@ class DownloadService {
     if (task == null || task.isCompleted) return;
 
     _cancelledTaskIds.add(taskId);
+    _triggerCancelSignal(taskId);
     task
       ..status = task.isDownloading ? '取消中' : '已取消'
       ..isCompleted = !task.isDownloading
@@ -203,13 +259,11 @@ class DownloadService {
     required DownloadedComic download,
     required Chapter chapter,
   }) async {
-    final files = await _listDownloadedPageFiles(
-      storageRoot: download.storageRoot,
-      providerId: download.providerId,
-      comicId: download.comicId,
-      chapterId: chapter.id,
+    final pages = await _resolveDownloadedReaderPages(
+      download: download,
+      chapter: chapter,
     );
-    if (files.isEmpty) {
+    if (pages.isEmpty) {
       throw StateError('本地章节文件不存在: ${chapter.name}');
     }
 
@@ -219,20 +273,67 @@ class DownloadService {
       comic: comic,
       chapter: chapter,
       chapters: download.chapters,
-      pages: List<ReaderPageImage>.unmodifiable(
-        files.asMap().entries.map((entry) {
-          final file = entry.value;
-          final name = p.basename(file.path);
-          return ReaderPageImage(
-            id: name,
-            url: '',
-            path: file.path,
-            originalName: name,
-          );
-        }),
-      ),
+      pages: pages,
       extern: const <String, dynamic>{'local': true},
     );
+  }
+
+  void _prepareCancelSignal(int taskId) {
+    _cancelSignals.remove(taskId);
+  }
+
+  Future<void> _cancelFutureFor(int taskId) {
+    return _cancelSignals.putIfAbsent(taskId, () => Completer<void>()).future;
+  }
+
+  void _triggerCancelSignal(int taskId) {
+    final signal = _cancelSignals.putIfAbsent(taskId, () => Completer<void>());
+    if (!signal.isCompleted) {
+      signal.complete();
+    }
+  }
+
+  Future<T> _raceWithCancellation<T>(int taskId, Future<T> future) async {
+    _throwIfCancelled(taskId);
+    final signal = _cancelSignals.putIfAbsent(taskId, () => Completer<void>());
+    final result = await Future.any<T>([
+      future,
+      signal.future.then<T>((_) => throw const _DownloadCancelled()),
+    ]);
+    _throwIfCancelled(taskId);
+    return result;
+  }
+
+  Future<void> _deleteDownloadedComicFiles({
+    required String providerId,
+    required String comicId,
+  }) async {
+    if (providerId.trim().isEmpty || comicId.trim().isEmpty) return;
+
+    final existing = _findDownloadedComic(_key(providerId, comicId));
+    if (existing != null) {
+      objectbox.unifiedDownloadBox.remove(existing.id);
+    }
+
+    try {
+      final targetDir = Directory(
+        p.join(
+          await getDownloadPath(),
+          providerId.trim(),
+          'original',
+          _sanitizeStoredPath(comicId),
+        ),
+      );
+      if (await targetDir.exists()) {
+        await targetDir.delete(recursive: true);
+      }
+    } catch (error, stackTrace) {
+      logger.w(
+        '删除取消下载文件失败: providerId=$providerId comicId=$comicId',
+        error: error,
+      );
+      logger.d(stackTrace);
+    }
   }
 
   DownloadTask? _findOpenTask({
@@ -331,6 +432,8 @@ class DownloadService {
     _notifyChanged();
 
     var downloadedPages = 0;
+    final downloadedChapters = <_DownloadedChapterRecord>[];
+    _prepareCancelSignal(dbTask.id);
 
     try {
       _throwIfCancelled(dbTask.id);
@@ -345,11 +448,15 @@ class DownloadService {
         objectbox.downloadTaskBox.put(dbTask);
         _notifyChanged();
 
-        final snapshot = await provider.getReaderChapterSnapshot(
-          comic: comic,
-          chapter: chapter,
-          chapters: chapters,
+        final snapshot = await _raceWithCancellation(
+          dbTask.id,
+          provider.getReaderChapterSnapshot(
+            comic: comic,
+            chapter: chapter,
+            chapters: chapters,
+          ),
         );
+        final downloadedImages = <DownloadedPageImage>[];
 
         for (
           var pageIndex = 0;
@@ -364,24 +471,46 @@ class DownloadService {
           objectbox.downloadTaskBox.put(dbTask);
           _notifyChanged();
 
-          await ProviderImageCache.downloadPicture(
-            providerId: snapshot.providerId,
-            comicId: snapshot.comic.id,
-            chapterId: snapshot.chapter.id,
-            url: page.url,
-            path: page.path,
-            pictureType: _pictureTypeFromExtern(page.extern),
-            extern: page.extern,
+          final downloadedPath = await _raceWithCancellation(
+            dbTask.id,
+            ProviderImageCache.downloadPicture(
+              providerId: snapshot.providerId,
+              comicId: snapshot.comic.id,
+              chapterId: snapshot.chapter.id,
+              url: page.url,
+              path: page.path,
+              pictureType: _pictureTypeFromExtern(page.extern),
+              extern: page.extern,
+              cancelSignal: _cancelFutureFor(dbTask.id),
+            ),
           );
           _throwIfCancelled(dbTask.id);
+          final storedName = p.basename(downloadedPath);
+          downloadedImages.add(
+            DownloadedPageImage(
+              id: page.id.trim().isNotEmpty ? page.id.trim() : storedName,
+              name: page.originalName.trim().isNotEmpty
+                  ? page.originalName.trim()
+                  : storedName,
+              path: storedName,
+              url: page.url,
+              extern: page.extern,
+            ),
+          );
           downloadedPages += 1;
         }
+        downloadedChapters.add(
+          _DownloadedChapterRecord(
+            chapter: chapter,
+            images: List<DownloadedPageImage>.unmodifiable(downloadedImages),
+          ),
+        );
       }
 
       await _saveDownloadedComic(
         providerId: task.from,
         comic: comic,
-        chapters: chapters,
+        chapters: downloadedChapters,
       );
 
       dbTask
@@ -391,6 +520,10 @@ class DownloadService {
       objectbox.downloadTaskBox.put(dbTask);
       _notifyChanged();
     } on _DownloadCancelled {
+      await _deleteDownloadedComicFiles(
+        providerId: task.from,
+        comicId: task.comicId,
+      );
       dbTask
         ..isCompleted = true
         ..isDownloading = false
@@ -400,6 +533,10 @@ class DownloadService {
       _notifyChanged();
     } catch (error, stackTrace) {
       if (_cancelledTaskIds.contains(dbTask.id)) {
+        await _deleteDownloadedComicFiles(
+          providerId: task.from,
+          comicId: task.comicId,
+        );
         dbTask
           ..isCompleted = true
           ..isDownloading = false
@@ -417,6 +554,8 @@ class DownloadService {
         ..status = '下载失败: $error';
       objectbox.downloadTaskBox.put(dbTask);
       _notifyChanged();
+    } finally {
+      _cancelSignals.remove(dbTask.id);
     }
   }
 
@@ -434,12 +573,17 @@ class DownloadService {
   Future<void> _saveDownloadedComic({
     required String providerId,
     required Comic comic,
-    required List<Chapter> chapters,
+    required List<_DownloadedChapterRecord> chapters,
   }) async {
     final key = _key(providerId, comic.id);
     final existing = _findDownloadedComic(key);
     final now = DateTime.now().toUtc();
-    final storageRoot = await getDownloadPath();
+    final storageRoot = p.join(
+      await getDownloadPath(),
+      providerId.trim(),
+      'original',
+      _sanitizeStoredPath(comic.id),
+    );
 
     objectbox.unifiedDownloadBox.put(
       UnifiedComicDownload(
@@ -468,7 +612,7 @@ class DownloadService {
         allowFavorite: true,
         allowDownload: true,
         chapters: jsonEncode(
-          chapters.map((chapter) => chapter.toJson()).toList(),
+          chapters.map((chapter) => chapter.toMap()).toList(),
         ),
         detailJson: jsonEncode(comic.toJson()),
         storageRoot: storageRoot,
@@ -511,7 +655,10 @@ class DownloadService {
     final creator = _decodeMap(download.creator)['name']?.toString() ?? '';
     final metadata = _decodeMap(download.metadata);
     final tags = _decodeTags(metadata['tags']);
-    final chapters = _decodeChapters(download.chapters);
+    final chapters = _decodeChapters(download.chapters, download.comicId);
+    final pageImagesByChapterId = _decodePageImagesByChapterId(
+      download.chapters,
+    );
 
     return DownloadedComic(
       providerId: download.source,
@@ -522,42 +669,87 @@ class DownloadService {
       creator: creator,
       tags: tags,
       chapters: chapters,
+      pageImagesByChapterId: pageImagesByChapterId,
       storageRoot: download.storageRoot,
       downloadedAt: download.downloadedAt.toUtc(),
     );
   }
 
-  Future<List<File>> _listDownloadedPageFiles({
+  Future<List<ReaderPageImage>> _resolveDownloadedReaderPages({
+    required DownloadedComic download,
+    required Chapter chapter,
+  }) async {
+    final storedImages =
+        download.pageImagesByChapterId[chapter.id] ??
+        const <DownloadedPageImage>[];
+    if (storedImages.isNotEmpty) {
+      final chapterDir = await _downloadedChapterDirectory(
+        storageRoot: download.storageRoot,
+        providerId: download.providerId,
+        comicId: download.comicId,
+        chapterId: chapter.id,
+      );
+      final pages = <ReaderPageImage>[];
+      for (final image in storedImages) {
+        final filePath = _resolveDownloadedImagePath(chapterDir, image);
+        if (!await _isReadableFile(File(filePath))) continue;
+
+        final name = image.name.trim().isNotEmpty
+            ? image.name.trim()
+            : p.basename(filePath);
+        pages.add(
+          ReaderPageImage(
+            id: image.id.trim().isNotEmpty ? image.id.trim() : name,
+            url: image.url,
+            path: filePath,
+            originalName: name,
+            extern: {...image.extern, 'local': true},
+          ),
+        );
+      }
+      return List<ReaderPageImage>.unmodifiable(pages);
+    }
+
+    return const <ReaderPageImage>[];
+  }
+
+  Future<Directory> _downloadedChapterDirectory({
     required String storageRoot,
     required String providerId,
     required String comicId,
     required String chapterId,
   }) async {
-    final downloadRoot = storageRoot.trim().isEmpty
-        ? await getDownloadPath()
+    final comicDir = storageRoot.trim().isEmpty
+        ? p.join(
+            await getDownloadPath(),
+            providerId.trim(),
+            'original',
+            _sanitizeStoredPath(comicId),
+          )
         : storageRoot.trim();
-    final chapterDir = Directory(
-      p.join(
-        downloadRoot,
-        providerId.trim(),
-        'original',
-        _sanitizeStoredPath(comicId),
-        _sanitizeStoredPath(chapterId),
-      ),
-    );
-    if (!await chapterDir.exists()) {
-      return const <File>[];
-    }
+    return Directory(p.join(comicDir, _sanitizeStoredPath(chapterId)));
+  }
 
-    final files = await chapterDir
-        .list()
-        .where((entity) => entity is File)
-        .cast<File>()
-        .toList();
-    files.sort(
-      (a, b) => _compareStoredFileNames(p.basename(a.path), p.basename(b.path)),
-    );
-    return files;
+  String _resolveDownloadedImagePath(
+    Directory chapterDir,
+    DownloadedPageImage image,
+  ) {
+    final storedPath = image.path.trim().isNotEmpty
+        ? image.path.trim()
+        : image.name.trim();
+    if (p.isAbsolute(storedPath)) {
+      return storedPath;
+    }
+    return p.join(chapterDir.path, _sanitizeStoredPath(storedPath));
+  }
+
+  Future<bool> _isReadableFile(File file) async {
+    try {
+      if (!await file.exists()) return false;
+      return await file.length() > 0;
+    } catch (_) {
+      return false;
+    }
   }
 
   void _throwIfCancelled(int taskId) {
@@ -624,17 +816,64 @@ class DownloadService {
     return url.isNotEmpty ? url : text;
   }
 
-  List<Chapter> _decodeChapters(String raw) {
+  List<Chapter> _decodeChapters(String raw, String comicId) {
     if (raw.trim().isEmpty) return const <Chapter>[];
     try {
       final decoded = jsonDecode(raw);
       if (decoded is! List) return const <Chapter>[];
       return decoded
           .whereType<Map>()
-          .map((item) => Chapter.fromJson(Map<String, dynamic>.from(item)))
+          .map((item) {
+            final map = Map<String, dynamic>.from(item);
+            return Chapter(
+              id: map['id']?.toString() ?? '',
+              comicId: map['comic_id']?.toString() ?? comicId,
+              name: map['name']?.toString() ?? '',
+              order: (map['order'] as num?)?.toInt() ?? 0,
+            );
+          })
+          .where((chapter) => chapter.id.isNotEmpty)
           .toList(growable: false);
     } catch (_) {
       return const <Chapter>[];
+    }
+  }
+
+  Map<String, List<DownloadedPageImage>> _decodePageImagesByChapterId(
+    String raw,
+  ) {
+    if (raw.trim().isEmpty) {
+      return const <String, List<DownloadedPageImage>>{};
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return const <String, List<DownloadedPageImage>>{};
+      }
+
+      final imagesByChapterId = <String, List<DownloadedPageImage>>{};
+      for (final item in decoded.whereType<Map>()) {
+        final map = Map<String, dynamic>.from(item);
+        final chapterId = map['id']?.toString() ?? '';
+        if (chapterId.isEmpty) continue;
+        final rawImages = map['images'];
+        if (rawImages is! List) continue;
+
+        final images = rawImages
+            .whereType<Map>()
+            .map(
+              (image) =>
+                  DownloadedPageImage.fromMap(Map<String, dynamic>.from(image)),
+            )
+            .where((image) => image.path.trim().isNotEmpty)
+            .toList(growable: false);
+        if (images.isNotEmpty) {
+          imagesByChapterId[chapterId] = images;
+        }
+      }
+      return imagesByChapterId;
+    } catch (_) {
+      return const <String, List<DownloadedPageImage>>{};
     }
   }
 
@@ -657,34 +896,6 @@ class DownloadService {
       if (decoded is Map) return Map<String, dynamic>.from(decoded);
     } catch (_) {}
     return const <String, dynamic>{};
-  }
-
-  int _compareStoredFileNames(String left, String right) {
-    final leftParts = _splitForNaturalSort(left);
-    final rightParts = _splitForNaturalSort(right);
-    final count = leftParts.length < rightParts.length
-        ? leftParts.length
-        : rightParts.length;
-
-    for (var index = 0; index < count; index += 1) {
-      final leftPart = leftParts[index];
-      final rightPart = rightParts[index];
-      final leftNumber = int.tryParse(leftPart);
-      final rightNumber = int.tryParse(rightPart);
-
-      final result = leftNumber != null && rightNumber != null
-          ? leftNumber.compareTo(rightNumber)
-          : leftPart.toLowerCase().compareTo(rightPart.toLowerCase());
-      if (result != 0) return result;
-    }
-
-    return leftParts.length.compareTo(rightParts.length);
-  }
-
-  List<String> _splitForNaturalSort(String value) {
-    return RegExp(
-      r'\d+|\D+',
-    ).allMatches(value).map((match) => match.group(0)!).toList();
   }
 
   void _notifyChanged() {

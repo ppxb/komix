@@ -23,6 +23,7 @@ class ProviderImageCache {
     required String path,
     PictureType pictureType = PictureType.page,
     Map<String, dynamic> extern = const <String, dynamic>{},
+    Future<void>? cancelSignal,
   }) async {
     final resolvedProviderId = providerId.trim();
     if (resolvedProviderId.isEmpty) {
@@ -76,6 +77,7 @@ class ProviderImageCache {
       url.trim(),
       headers: _headersFromExtern(extern),
       maxRetries: 3,
+      cancelSignal: cancelSignal,
     );
 
     if (_needsJmDecode(
@@ -112,6 +114,7 @@ class ProviderImageCache {
     required String path,
     PictureType pictureType = PictureType.page,
     Map<String, dynamic> extern = const <String, dynamic>{},
+    Future<void>? cancelSignal,
   }) async {
     final cachedPath = await getCachePicture(
       providerId: providerId,
@@ -121,6 +124,7 @@ class ProviderImageCache {
       path: path,
       pictureType: pictureType,
       extern: extern,
+      cancelSignal: cancelSignal,
     );
 
     final storedName = _storedFileName(path: path, url: url);
@@ -199,7 +203,9 @@ String _sanitizeStoredPath(String rawPath) {
   final candidate = p.isAbsolute(raw) ? p.basename(raw) : raw;
   final sanitized = candidate.replaceAll(RegExp(r'[^a-zA-Z0-9_\-.]'), '_');
   if (sanitized.isEmpty) {
-    throw StateError('normalizeStoredAssetPath received invalid path: $rawPath');
+    throw StateError(
+      'normalizeStoredAssetPath received invalid path: $rawPath',
+    );
   }
   return sanitized;
 }
@@ -249,12 +255,18 @@ Future<Uint8List> _downloadImageWithRetry(
   String url, {
   required Map<String, String> headers,
   required int maxRetries,
+  Future<void>? cancelSignal,
 }) async {
   Object? lastError;
   for (var attempt = 1; attempt <= maxRetries; attempt += 1) {
     try {
-      return await _downloadImage(url, headers: headers);
+      return await _downloadImage(
+        url,
+        headers: headers,
+        cancelSignal: cancelSignal,
+      );
     } catch (error) {
+      if (error is _ImageDownloadCancelled) rethrow;
       lastError = error;
       logger.w(
         'download image failed attempt=$attempt/$maxRetries url=$url',
@@ -271,26 +283,49 @@ Future<Uint8List> _downloadImageWithRetry(
 Future<Uint8List> _downloadImage(
   String url, {
   required Map<String, String> headers,
+  Future<void>? cancelSignal,
 }) async {
   final uri = Uri.parse(url);
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
   try {
-    final request = await client.getUrl(uri);
-    request.followRedirects = true;
-    request.headers.set(HttpHeaders.hostHeader, uri.host);
-    for (final entry in headers.entries) {
-      if (entry.key.trim().isEmpty) continue;
-      request.headers.set(entry.key, entry.value);
+    final future = _downloadImageWithClient(client, uri: uri, headers: headers);
+    if (cancelSignal == null) {
+      return await future;
     }
-
-    final response = await request.close().timeout(const Duration(seconds: 30));
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw HttpException('status=${response.statusCode}', uri: uri);
-    }
-    return consolidateHttpClientResponseBytes(response);
+    return await Future.any<Uint8List>([
+      future,
+      cancelSignal.then<Uint8List>((_) {
+        client.close(force: true);
+        throw const _ImageDownloadCancelled();
+      }),
+    ]);
   } finally {
     client.close(force: true);
   }
+}
+
+Future<Uint8List> _downloadImageWithClient(
+  HttpClient client, {
+  required Uri uri,
+  required Map<String, String> headers,
+}) async {
+  final request = await client.getUrl(uri);
+  request.followRedirects = true;
+  request.headers.set(HttpHeaders.hostHeader, uri.host);
+  for (final entry in headers.entries) {
+    if (entry.key.trim().isEmpty) continue;
+    request.headers.set(entry.key, entry.value);
+  }
+
+  final response = await request.close().timeout(const Duration(seconds: 30));
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw HttpException('status=${response.statusCode}', uri: uri);
+  }
+  return consolidateHttpClientResponseBytes(response);
+}
+
+class _ImageDownloadCancelled implements Exception {
+  const _ImageDownloadCancelled();
 }
 
 Future<void> _saveImage(Uint8List imageData, String filePath) async {
