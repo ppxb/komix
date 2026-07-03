@@ -11,6 +11,7 @@ import '../config/global/global_setting.dart';
 import '../models/comic.dart';
 import '../models/reader_snapshot.dart';
 import '../reader/image_size_cubit.dart';
+import '../reader/reader_chapter_navigation_controller.dart';
 import '../reader/reader_chapter_view_state.dart';
 import '../reader/reader_action_controller.dart';
 import '../reader/reader_cubit.dart';
@@ -82,6 +83,7 @@ class _ReaderPageState extends State<ReaderPage> {
   late final ReaderLayoutMetrics _layoutMetrics;
   late final ReaderPositionController _positionController;
   late final ReaderProgressController _progressController;
+  late final ReaderChapterNavigationController _chapterNavigation;
   late final ReaderInitialPageRestorer _initialPageRestorer;
   final ReaderChapterViewState _chapterView = ReaderChapterViewState();
   final ScrollController _scrollController = ScrollController();
@@ -128,7 +130,10 @@ class _ReaderPageState extends State<ReaderPage> {
       observerController: _observerController,
       pageController: _pageController,
       onBeforeTurnPage: _restoreScaleBeforeTurnPage,
-      onChapterBoundary: _handleChapterBoundary,
+      onChapterBoundary: (isNext) => _chapterNavigation.handleBoundary(
+        isNext,
+        chapterEndPageIndex: _chapterEndPageIndex,
+      ),
     );
     _sideEffects = ReaderSideEffectController(
       actionController: _actionController,
@@ -198,6 +203,24 @@ class _ReaderPageState extends State<ReaderPage> {
       setMenuVisible: _setMenuVisible,
       resetViewerTransform: _resetViewerTransformIfNeeded,
     );
+    _chapterNavigation = ReaderChapterNavigationController(
+      chapters: widget.chapters,
+      readerCubit: _readerCubit,
+      chapterView: _chapterView,
+      historyManager: _historyManager,
+      sessionController: _sessionController,
+      sideEffects: _sideEffects,
+      positionController: _positionController,
+      progressController: _progressController,
+      scrollController: _scrollController,
+      pageController: _pageController,
+      chapterIndex: () => _chapterIndex,
+      isRestoringInitialPage: () =>
+          _initialPageRestorer.isRestoringInitialPage,
+      resetViewerTransform: _resetViewerTransformIfNeeded,
+      setChapterFuture: _setChapterFuture,
+      setChapterState: _setChapterState,
+    );
     _sideEffects.listenVolume();
     unawaited(_historyManager.init());
     _chapterFuture = _sessionController.loadChapter(_chapterIndex);
@@ -236,6 +259,27 @@ class _ReaderPageState extends State<ReaderPage> {
       return;
     }
     _pageIndex = pageIndex;
+  }
+
+  void _setChapterFuture(Future<ReaderChapterData> chapterFuture) {
+    if (!mounted) return;
+    setState(() {
+      _chapterFuture = chapterFuture;
+    });
+  }
+
+  void _setChapterState({
+    required int chapterIndex,
+    required Future<ReaderChapterData> chapterFuture,
+    required int pageIndex,
+  }) {
+    if (!mounted) return;
+    setState(() {
+      _chapterIndex = chapterIndex;
+      _chapterFuture = chapterFuture;
+      _pageIndex = pageIndex;
+      _initialPageRestorer.configure(pageIndex);
+    });
   }
 
   void _setMenuVisible(bool visible) {
@@ -563,70 +607,6 @@ class _ReaderPageState extends State<ReaderPage> {
     return _sessionController.chapterTitle(index);
   }
 
-  Future<void> _reloadChapter() {
-    _sideEffects.hideEinkMask();
-    _resetViewerTransformIfNeeded();
-    _sessionController.removePrefetch(_chapterIndex);
-    final future = _sessionController.loadChapter(_chapterIndex);
-    setState(() {
-      _chapterFuture = future;
-    });
-    return future.then<void>((_) {}, onError: (_) {});
-  }
-
-  bool _handleChapterBoundary(bool isNext) {
-    if (_progressController.isSeeking ||
-        _initialPageRestorer.isRestoringInitialPage ||
-        widget.chapters.isEmpty) {
-      return false;
-    }
-
-    final targetIndex = _chapterIndex + (isNext ? 1 : -1);
-    if (targetIndex < 0 || targetIndex >= widget.chapters.length) {
-      return false;
-    }
-
-    _goToChapter(
-      targetIndex,
-      initialPageIndex: isNext ? 0 : _chapterEndPageIndex,
-    );
-    return true;
-  }
-
-  void _goToChapter(int index, {int initialPageIndex = 0}) {
-    if (index < 0 ||
-        index >= widget.chapters.length ||
-        index == _chapterIndex) {
-      return;
-    }
-
-    _progressController.cancelPendingSave();
-    _sideEffects.stopAutoRead();
-    _sideEffects.hideEinkMask();
-    _resetViewerTransformIfNeeded();
-    unawaited(_progressController.saveNow());
-    _positionController.cancelCorrection();
-    _historyManager.markLoading();
-    final oldImageSizeCubit = _chapterView.reset();
-    final targetInitialPageIndex = initialPageIndex < 0 ? 0 : initialPageIndex;
-    setState(() {
-      _chapterIndex = index;
-      _chapterFuture = _sessionController.takeChapterFuture(index);
-      _pageIndex = targetInitialPageIndex;
-      _initialPageRestorer.configure(targetInitialPageIndex);
-    });
-    unawaited(oldImageSizeCubit?.close());
-    _readerCubit.updateTotalSlots(0);
-    _readerCubit.updatePageIndex(0);
-
-    if (_scrollController.hasClients) {
-      _scrollController.jumpTo(0);
-    }
-    if (_pageController.hasClients) {
-      _pageController.jumpToPage(0);
-    }
-  }
-
   Future<void> _showChapterPicker() async {
     if (widget.chapters.isEmpty) return;
 
@@ -672,7 +652,7 @@ class _ReaderPageState extends State<ReaderPage> {
     );
 
     if (!mounted || selectedIndex == null) return;
-    _goToChapter(selectedIndex);
+    _chapterNavigation.goToChapter(selectedIndex);
   }
 
   void _handleReaderLayoutChanged(ReadSettingState previousReadSetting) {
@@ -779,108 +759,32 @@ class _ReaderPageState extends State<ReaderPage> {
                         onInteractionEnd: (_) => _updateViewerScale(),
                         child: NotificationListener<ScrollNotification>(
                           onNotification: _handleReaderScrollNotification,
-                          child: FutureBuilder<ReaderChapterData>(
-                            key: ValueKey(_chapterIndex),
-                            future: _chapterFuture,
-                            builder: (context, snapshot) {
-                              if (snapshot.connectionState ==
-                                      ConnectionState.waiting &&
-                                  !snapshot.hasData) {
-                                return const Center(
-                                  child: CircularProgressIndicator(
-                                    color: Colors.white,
-                                  ),
-                                );
-                              }
-
-                              if (snapshot.hasError && !snapshot.hasData) {
-                                return _ReaderErrorView(
-                                  message: snapshot.error.toString(),
-                                  onRetry: _reloadChapter,
-                                );
-                              }
-
-                              final data = snapshot.requireData;
-                              final chapterSnapshot = data.snapshot;
-                              if (chapterSnapshot.pages.isEmpty) {
-                                return _ReaderEmptyView(
-                                  onRetry: _reloadChapter,
-                                );
-                              }
-
-                              if (!_isChapterDataApplied(data)) {
-                                _scheduleChapterDataApply(data, readSetting);
-                                return const Center(
-                                  child: CircularProgressIndicator(
-                                    color: Colors.white,
-                                  ),
-                                );
-                              }
-
-                              final imageSizeCubit = _imageSizeCubit;
-                              if (imageSizeCubit == null) {
-                                return const Center(
-                                  child: CircularProgressIndicator(
-                                    color: Colors.white,
-                                  ),
-                                );
-                              }
-                              final enableDoublePage =
-                                  effectiveDoublePageEnabled;
-                              final slotCount = _layoutMetrics.slotCountFor(
-                                readSetting,
-                                buildContext: context,
-                              );
-                              final maxSlot = slotCount > 0 ? slotCount - 1 : 0;
-                              final safePageIndex = _pageIndex
-                                  .clamp(0, maxSlot)
-                                  .toInt();
-                              if (_readerCubit.state.totalSlots != slotCount ||
-                                  _pageIndex != safePageIndex) {
-                                _scheduleReaderMetricsSync(readSetting);
-                              }
-
-                              return BlocProvider.value(
-                                value: imageSizeCubit,
-                                child: isColumnReadMode(readSetting.readMode)
-                                    ? _ReaderColumnImageList(
-                                        pageKeys: _pageKeys,
-                                        slotKeys: _slotKeys,
-                                        providerId: chapterSnapshot.providerId,
-                                        comicId: chapterSnapshot.comic.id,
-                                        chapterId: chapterSnapshot.chapter.id,
-                                        pages: chapterSnapshot.pages,
-                                        controller: _scrollController,
-                                        observerController: _observerController,
-                                        enableDoublePage: enableDoublePage,
-                                        isRtl: isReverseRowReadMode(
-                                          readSetting.readMode,
-                                        ),
-                                        backgroundColor: backgroundColor,
-                                        onPageObserved: _progressController
-                                            .handleObservedPageIndex,
-                                        onSizeResolved:
-                                            _handleImageSizeResolved,
-                                      )
-                                    : _ReaderRowImagePager(
-                                        pageKeys: _pageKeys,
-                                        providerId: chapterSnapshot.providerId,
-                                        comicId: chapterSnapshot.comic.id,
-                                        chapterId: chapterSnapshot.chapter.id,
-                                        pages: chapterSnapshot.pages,
-                                        controller: _pageController,
-                                        enableDoublePage: enableDoublePage,
-                                        isRtl: isReverseRowReadMode(
-                                          readSetting.readMode,
-                                        ),
-                                        backgroundColor: backgroundColor,
-                                        onPageChanged: _progressController
-                                            .handlePagedPageChanged,
-                                        onSizeResolved:
-                                            _handleImageSizeResolved,
-                                      ),
-                              );
-                            },
+                          child: _ReaderChapterContent(
+                            chapterIndex: _chapterIndex,
+                            chapterFuture: _chapterFuture,
+                            readSetting: readSetting,
+                            backgroundColor: backgroundColor,
+                            enableDoublePage: effectiveDoublePageEnabled,
+                            pageIndex: _pageIndex,
+                            readerCubit: _readerCubit,
+                            layoutMetrics: _layoutMetrics,
+                            imageSizeCubit: _imageSizeCubit,
+                            pageKeys: _pageKeys,
+                            slotKeys: _slotKeys,
+                            scrollController: _scrollController,
+                            observerController: _observerController,
+                            pageController: _pageController,
+                            onRetry: _chapterNavigation.reloadChapter,
+                            isChapterDataApplied: _isChapterDataApplied,
+                            scheduleChapterDataApply:
+                                _scheduleChapterDataApply,
+                            scheduleReaderMetricsSync:
+                                _scheduleReaderMetricsSync,
+                            onPageObserved:
+                                _progressController.handleObservedPageIndex,
+                            onPageChanged:
+                                _progressController.handlePagedPageChanged,
+                            onSizeResolved: _handleImageSizeResolved,
                           ),
                         ),
                       ),
@@ -918,7 +822,7 @@ class _ReaderPageState extends State<ReaderPage> {
                   title: widget.comic.title,
                   chapterTitle: _chapterTitle(_chapterIndex),
                   isVisible: _isMenuVisible,
-                  onRefresh: _reloadChapter,
+                  onRefresh: _chapterNavigation.reloadChapter,
                 ),
                 _ReaderBottomOverlay(
                   isVisible: _isMenuVisible,
@@ -934,10 +838,12 @@ class _ReaderPageState extends State<ReaderPage> {
                         _progressController.handleProgressChanged,
                     onProgressChangeEnd:
                         _progressController.handleProgressChangeEnd,
-                    onPrevious: () => _goToChapter(_chapterIndex - 1),
+                    onPrevious: () =>
+                        _chapterNavigation.goToChapter(_chapterIndex - 1),
                     onChapterPicker: _showChapterPicker,
                     onSettings: () => unawaited(_showReaderSettings()),
-                    onNext: () => _goToChapter(_chapterIndex + 1),
+                    onNext: () =>
+                        _chapterNavigation.goToChapter(_chapterIndex + 1),
                   ),
                 ),
                 if (_initialPageRestorer.isRestoringInitialPage)

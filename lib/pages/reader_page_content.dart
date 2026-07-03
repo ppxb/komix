@@ -1,5 +1,145 @@
 part of 'reader_page.dart';
 
+typedef _ScheduleChapterDataApply = void Function(
+  ReaderChapterData data,
+  ReadSettingState readSetting,
+);
+
+class _ReaderChapterContent extends StatelessWidget {
+  final int chapterIndex;
+  final Future<ReaderChapterData> chapterFuture;
+  final ReadSettingState readSetting;
+  final Color backgroundColor;
+  final bool enableDoublePage;
+  final int pageIndex;
+  final ReaderCubit readerCubit;
+  final ReaderLayoutMetrics layoutMetrics;
+  final ImageSizeCubit? imageSizeCubit;
+  final List<GlobalKey> pageKeys;
+  final List<GlobalKey> slotKeys;
+  final ScrollController scrollController;
+  final ListObserverController observerController;
+  final PageController pageController;
+  final VoidCallback onRetry;
+  final bool Function(ReaderChapterData data) isChapterDataApplied;
+  final _ScheduleChapterDataApply scheduleChapterDataApply;
+  final ValueChanged<ReadSettingState> scheduleReaderMetricsSync;
+  final ValueChanged<int> onPageObserved;
+  final ValueChanged<int> onPageChanged;
+  final void Function(int index, Size size) onSizeResolved;
+
+  const _ReaderChapterContent({
+    required this.chapterIndex,
+    required this.chapterFuture,
+    required this.readSetting,
+    required this.backgroundColor,
+    required this.enableDoublePage,
+    required this.pageIndex,
+    required this.readerCubit,
+    required this.layoutMetrics,
+    required this.imageSizeCubit,
+    required this.pageKeys,
+    required this.slotKeys,
+    required this.scrollController,
+    required this.observerController,
+    required this.pageController,
+    required this.onRetry,
+    required this.isChapterDataApplied,
+    required this.scheduleChapterDataApply,
+    required this.scheduleReaderMetricsSync,
+    required this.onPageObserved,
+    required this.onPageChanged,
+    required this.onSizeResolved,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<ReaderChapterData>(
+      key: ValueKey(chapterIndex),
+      future: chapterFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
+          return const Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          );
+        }
+
+        if (snapshot.hasError && !snapshot.hasData) {
+          return _ReaderErrorView(
+            message: snapshot.error.toString(),
+            onRetry: onRetry,
+          );
+        }
+
+        final data = snapshot.requireData;
+        final chapterSnapshot = data.snapshot;
+        if (chapterSnapshot.pages.isEmpty) {
+          return _ReaderEmptyView(onRetry: onRetry);
+        }
+
+        if (!isChapterDataApplied(data)) {
+          scheduleChapterDataApply(data, readSetting);
+          return const Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          );
+        }
+
+        final currentImageSizeCubit = imageSizeCubit;
+        if (currentImageSizeCubit == null) {
+          return const Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          );
+        }
+
+        final slotCount = layoutMetrics.slotCountFor(
+          readSetting,
+          buildContext: context,
+        );
+        final maxSlot = slotCount > 0 ? slotCount - 1 : 0;
+        final safePageIndex = pageIndex.clamp(0, maxSlot).toInt();
+        if (readerCubit.state.totalSlots != slotCount ||
+            pageIndex != safePageIndex) {
+          scheduleReaderMetricsSync(readSetting);
+        }
+
+        return BlocProvider.value(
+          value: currentImageSizeCubit,
+          child: isColumnReadMode(readSetting.readMode)
+              ? _ReaderColumnImageList(
+                  pageKeys: pageKeys,
+                  slotKeys: slotKeys,
+                  providerId: chapterSnapshot.providerId,
+                  comicId: chapterSnapshot.comic.id,
+                  chapterId: chapterSnapshot.chapter.id,
+                  pages: chapterSnapshot.pages,
+                  controller: scrollController,
+                  observerController: observerController,
+                  enableDoublePage: enableDoublePage,
+                  isRtl: isReverseRowReadMode(readSetting.readMode),
+                  backgroundColor: backgroundColor,
+                  onPageObserved: onPageObserved,
+                  onSizeResolved: onSizeResolved,
+                )
+              : _ReaderRowImagePager(
+                  pageKeys: pageKeys,
+                  providerId: chapterSnapshot.providerId,
+                  comicId: chapterSnapshot.comic.id,
+                  chapterId: chapterSnapshot.chapter.id,
+                  pages: chapterSnapshot.pages,
+                  controller: pageController,
+                  enableDoublePage: enableDoublePage,
+                  isRtl: isReverseRowReadMode(readSetting.readMode),
+                  backgroundColor: backgroundColor,
+                  onPageChanged: onPageChanged,
+                  onSizeResolved: onSizeResolved,
+                ),
+        );
+      },
+    );
+  }
+}
+
 class _ReaderColumnImageList extends StatelessWidget {
   final List<GlobalKey> pageKeys;
   final List<GlobalKey> slotKeys;
