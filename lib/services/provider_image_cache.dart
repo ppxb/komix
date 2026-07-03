@@ -103,6 +103,54 @@ class ProviderImageCache {
     }
     throw Exception('图片保存失败');
   }
+
+  static Future<String> downloadPicture({
+    required String providerId,
+    required String comicId,
+    required String chapterId,
+    required String url,
+    required String path,
+    PictureType pictureType = PictureType.page,
+    Map<String, dynamic> extern = const <String, dynamic>{},
+  }) async {
+    final cachedPath = await getCachePicture(
+      providerId: providerId,
+      comicId: comicId,
+      chapterId: chapterId,
+      url: url,
+      path: path,
+      pictureType: pictureType,
+      extern: extern,
+    );
+
+    final storedName = _storedFileName(path: path, url: url);
+    if (storedName.isEmpty) {
+      throw Exception('404');
+    }
+
+    final downloadPath = await getDownloadPath();
+    final downloadFilePath = _buildStoredFilePath(
+      downloadPath,
+      providerId.trim(),
+      storedName,
+      comicId,
+      pictureType == PictureType.cover ? '' : chapterId,
+      rootFolder: 'original',
+    );
+
+    if (p.equals(cachedPath, downloadFilePath)) {
+      return downloadFilePath;
+    }
+
+    final source = File(cachedPath);
+    if (!await _isReadableFile(source)) {
+      throw Exception('图片缓存不可读');
+    }
+
+    await Directory(p.dirname(downloadFilePath)).create(recursive: true);
+    await source.copy(downloadFilePath);
+    return downloadFilePath;
+  }
 }
 
 String _buildStoredFilePath(

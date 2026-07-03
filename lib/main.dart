@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'config/global/global_setting.dart';
 import 'object_box/model.dart';
 import 'object_box/object_box.dart';
+import 'services/download_service.dart';
 import 'src/rust/frb_generated.dart';
 import 'providers/provider_registry.dart';
 import 'pages/main_page.dart';
@@ -19,6 +20,7 @@ Future<void> main() async {
   if (objectbox.userSettingBox.get(1) == null) {
     objectbox.userSettingBox.put(UserSetting());
   }
+  DownloadService.instance.startProcessing();
   runApp(const MyApp());
 }
 

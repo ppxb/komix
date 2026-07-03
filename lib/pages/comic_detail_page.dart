@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../models/comic.dart';
 import '../providers/provider_registry.dart';
+import '../services/download_service.dart';
 import '../services/favorite_service.dart';
 import '../services/reading_progress_service.dart';
 import 'reader_page.dart';
@@ -31,6 +32,7 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
   bool _isAppBarOpaque = false;
   bool _isFavorite = false;
   bool _isFavoriteLoading = false;
+  bool _isDownloadLoading = false;
 
   String get _providerName =>
       ProviderRegistry().getProvider(widget.providerId)?.name ??
@@ -128,6 +130,33 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
       if (!mounted) return;
       setState(() {
         _isFavoriteLoading = false;
+      });
+    }
+  }
+
+  Future<void> _enqueueDownload() async {
+    if (_isDownloadLoading) return;
+
+    setState(() {
+      _isDownloadLoading = true;
+    });
+
+    try {
+      final data = await _detailFuture;
+      final enqueued = await DownloadService.instance.enqueueComic(
+        providerId: widget.providerId,
+        comic: data.comic,
+        chapters: data.chapters,
+      );
+      if (!mounted) return;
+      _showPendingMessage(enqueued ? '已加入下载队列' : '下载任务已存在');
+    } catch (error) {
+      if (!mounted) return;
+      _showPendingMessage(error.toString());
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isDownloadLoading = false;
       });
     }
   }
@@ -254,8 +283,15 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
         actions: [
           IconButton(
             tooltip: '下载',
-            onPressed: () => _showPendingMessage('下载功能还没接上'),
-            icon: const Icon(Icons.download_outlined),
+            onPressed: _isDownloadLoading
+                ? null
+                : () => unawaited(_enqueueDownload()),
+            icon: _isDownloadLoading
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.download_outlined),
           ),
           PopupMenuButton<_DetailMenuAction>(
             onSelected: (action) {

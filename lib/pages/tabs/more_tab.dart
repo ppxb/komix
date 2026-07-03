@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/provider_registry.dart';
+import '../downloads_page.dart';
 
 /// 更多 Tab - 设置和其他功能
 class MoreTab extends StatelessWidget {
@@ -51,7 +52,11 @@ class MoreTab extends StatelessWidget {
                 title: '下载管理',
                 subtitle: '管理已下载的漫画',
                 onTap: () {
-                  // TODO: 导航到下载管理
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (context) => const DownloadsPage(),
+                    ),
+                  );
                 },
               ),
             ],
