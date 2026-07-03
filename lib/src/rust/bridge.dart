@@ -9,6 +9,19 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 /// 初始化 Rust 核心
 Future<String> init() => RustLib.instance.api.crateBridgeInit();
 
+/// 保存 JM 反混淆后的图片到磁盘
+Future<void> decodeJmImageToDisk({
+  required List<int> imageData,
+  required int chapterId,
+  required String fileName,
+  required String url,
+}) => RustLib.instance.api.crateBridgeDecodeJmImageToDisk(
+  imageData: imageData,
+  chapterId: chapterId,
+  fileName: fileName,
+  url: url,
+);
+
 /// 搜索漫画 (JM 源)
 Future<String> jmSearch({required String keyword, required int page}) =>
     RustLib.instance.api.crateBridgeJmSearch(keyword: keyword, page: page);
