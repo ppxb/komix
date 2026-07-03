@@ -45,6 +45,8 @@ class _ReaderSettingsSheet extends StatelessWidget {
               const SizedBox(height: 22),
               const _TapModeSection(),
               const SizedBox(height: 22),
+              const _GestureSection(),
+              const SizedBox(height: 22),
               const _BackgroundSection(),
               const SizedBox(height: 22),
               const _ReadExperienceSection(),
@@ -228,6 +230,38 @@ class _BackgroundSection extends StatelessWidget {
               cubit.updateReadSetting(
                 (current) => current.copyWith(
                   readerBackgroundMode: ReaderBackgroundMode.grey,
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GestureSection extends StatelessWidget {
+  const _GestureSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final setting = context.watch<GlobalSettingCubit>().state.readSetting;
+    final cubit = context.read<GlobalSettingCubit>();
+
+    return _SettingsSection(
+      title: '手势',
+      child: Column(
+        children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('双击打开操作栏'),
+            subtitle: const Text('开启后，单击中间区域只关闭已显示的操作栏'),
+            value: setting.doubleTapOpenMenu,
+            onChanged: (value) {
+              cubit.updateReadSetting(
+                (current) => current.copyWith(
+                  doubleTapOpenMenu: value,
+                  doubleTapZoom: value ? false : current.doubleTapZoom,
                 ),
               );
             },

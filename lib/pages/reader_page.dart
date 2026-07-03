@@ -258,15 +258,32 @@ class _ReaderPageState extends State<ReaderPage> {
     await Future<void>.delayed(Duration.zero);
     final details = _tapDownDetails;
     if (details == null || !mounted) return;
+    final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
 
     ReaderGestureLogic.handleTap(
       actionController: _actionController,
       controller: _pageController,
       context: context,
       details: details,
-      onToggleMenu: _toggleMenu,
+      onToggleMenu: readSetting.doubleTapOpenMenu
+          ? () {
+              if (_isMenuVisible) {
+                _toggleMenu();
+              }
+            }
+          : _toggleMenu,
     );
     _tapDownDetails = null;
+  }
+
+  void _handleDoubleTap() {
+    if (!mounted) return;
+    final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
+    _tapDownDetails = null;
+
+    if (readSetting.doubleTapOpenMenu) {
+      _toggleMenu();
+    }
   }
 
   void _handleScrollChanged() {
@@ -889,6 +906,9 @@ class _ReaderPageState extends State<ReaderPage> {
                     behavior: HitTestBehavior.translucent,
                     onTapDown: (details) => _tapDownDetails = details,
                     onTap: _handleTap,
+                    onDoubleTap: readSetting.doubleTapOpenMenu
+                        ? _handleDoubleTap
+                        : null,
                     child: NotificationListener<ScrollNotification>(
                       onNotification: _handleReaderScrollNotification,
                       child: FutureBuilder<_ReaderChapterData>(
