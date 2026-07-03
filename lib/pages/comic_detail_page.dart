@@ -90,7 +90,7 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
     Comic comic,
     List<Chapter> chapters,
     int chapterIndex, {
-    double initialScrollProgress = 0,
+    int initialPageIndex = 0,
   }) {
     if (chapters.isEmpty) return;
 
@@ -114,7 +114,7 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
               comic: comic,
               chapters: chapters,
               initialChapterIndex: chapterIndex,
-              initialScrollProgress: initialScrollProgress,
+              initialPageIndex: initialPageIndex,
             ),
           );
         },
@@ -147,7 +147,7 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
     ReadingProgress? progress,
   ) {
     var chapterIndex = 0;
-    var scrollProgress = 0.0;
+    var pageIndex = 0;
 
     if (progress != null && progress.canContinue) {
       final matchedIndex = data.chapters.indexWhere(
@@ -156,14 +156,14 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
       chapterIndex = matchedIndex >= 0
           ? matchedIndex
           : progress.chapterIndex.clamp(0, data.chapters.length - 1).toInt();
-      scrollProgress = progress.scrollProgress.clamp(0.0, 1.0).toDouble();
+      pageIndex = progress.pageIndex.clamp(0, progress.pageCount - 1).toInt();
     }
 
     _openReader(
       data.comic,
       data.chapters,
       chapterIndex,
-      initialScrollProgress: scrollProgress,
+      initialPageIndex: pageIndex,
     );
   }
 

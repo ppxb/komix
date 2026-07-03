@@ -14,23 +14,29 @@ class MainPage extends StatefulWidget {
 
 class _MainPageState extends State<MainPage> {
   int _currentIndex = 0;
+  int _historyRefreshVersion = 0;
 
-  final List<Widget> _tabs = const [
-    BrowseTab(),
-    FavoriteTab(),
-    HistoryTab(),
-    MoreTab(),
-  ];
+  List<Widget> _buildTabs() {
+    return [
+      const BrowseTab(),
+      const FavoriteTab(),
+      HistoryTab(refreshVersion: _historyRefreshVersion),
+      const MoreTab(),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: _tabs),
+      body: IndexedStack(index: _currentIndex, children: _buildTabs()),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
         onDestinationSelected: (index) {
           setState(() {
             _currentIndex = index;
+            if (index == 2) {
+              _historyRefreshVersion += 1;
+            }
           });
         },
         destinations: const [
