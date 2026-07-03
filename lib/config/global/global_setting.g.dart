@@ -1,0 +1,347 @@
+// GENERATED CODE - DO NOT MODIFY BY HAND
+
+part of 'global_setting.dart';
+
+// **************************************************************************
+// JsonSerializableGenerator
+// **************************************************************************
+
+_GlobalSettingState _$GlobalSettingStateFromJson(
+  Map<String, dynamic> json,
+) => _GlobalSettingState(
+  dynamicColor: json['dynamicColor'] as bool? ?? true,
+  themeMode:
+      $enumDecodeNullable(_$ThemeModeEnumMap, json['themeMode']) ??
+      ThemeMode.system,
+  isAMOLED: json['isAMOLED'] as bool? ?? true,
+  seedColor: json['seedColor'] == null
+      ? const Color(0xFFEF5350)
+      : const ColorConverter().fromJson((json['seedColor'] as num).toInt()),
+  themeInitState: (json['themeInitState'] as num?)?.toInt() ?? 0,
+  locale: json['locale'] == null
+      ? const Locale('zh', 'CN')
+      : const LocaleConverter().fromJson(json['locale'] as String),
+  welcomePageNum: (json['welcomePageNum'] as num?)?.toInt() ?? 0,
+  syncSetting: json['syncSetting'] == null
+      ? const SyncSettingState()
+      : SyncSettingState.fromJson(json['syncSetting'] as Map<String, dynamic>),
+  maskedKeywords:
+      (json['maskedKeywords'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList() ??
+      const [],
+  socks5Proxy: json['socks5Proxy'] as String? ?? '',
+  needCleanCache: json['needCleanCache'] as bool? ?? false,
+  comicChoice: (json['comicChoice'] as num?)?.toInt() ?? 1,
+  disableBika: json['disableBika'] as bool? ?? false,
+  enableMemoryDebug: json['enableMemoryDebug'] as bool? ?? false,
+  logAddress: json['logAddress'] as String? ?? '',
+  forceEnableImpeller: json['forceEnableImpeller'] as bool? ?? false,
+  updateAccelerate: json['updateAccelerate'] as bool? ?? true,
+  oldPageRollbackEnabled: json['oldPageRollbackEnabled'] as bool? ?? false,
+  searchHistory:
+      (json['searchHistory'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList() ??
+      const [],
+  windowWidth: (json['windowWidth'] as num?)?.toDouble() ?? 1280.0,
+  windowHeight: (json['windowHeight'] as num?)?.toDouble() ?? 720.0,
+  windowX: (json['windowX'] as num?)?.toDouble() ?? 0,
+  windowY: (json['windowY'] as num?)?.toDouble() ?? 0,
+  readSetting: json['readSetting'] == null
+      ? const ReadSettingState()
+      : ReadSettingState.fromJson(json['readSetting'] as Map<String, dynamic>),
+  customExportPath: json['customExportPath'] as String? ?? '',
+  appLockSetting: json['appLockSetting'] == null
+      ? const AppLockSettingState()
+      : AppLockSettingState.fromJson(
+          json['appLockSetting'] as Map<String, dynamic>,
+        ),
+  compatibleVersion: json['compatibleVersion'] as String? ?? "",
+  cacheSetting: json['cacheSetting'] == null
+      ? const CacheSettingState()
+      : CacheSettingState.fromJson(
+          json['cacheSetting'] as Map<String, dynamic>,
+        ),
+  chineseConvertMode:
+      $enumDecodeNullable(
+        _$ChineseConvertModeEnumMap,
+        json['chineseConvertMode'],
+      ) ??
+      ChineseConvertMode.off,
+);
+
+Map<String, dynamic> _$GlobalSettingStateToJson(_GlobalSettingState instance) =>
+    <String, dynamic>{
+      'dynamicColor': instance.dynamicColor,
+      'themeMode': _$ThemeModeEnumMap[instance.themeMode]!,
+      'isAMOLED': instance.isAMOLED,
+      'seedColor': const ColorConverter().toJson(instance.seedColor),
+      'themeInitState': instance.themeInitState,
+      'locale': const LocaleConverter().toJson(instance.locale),
+      'welcomePageNum': instance.welcomePageNum,
+      'syncSetting': instance.syncSetting.toJson(),
+      'maskedKeywords': instance.maskedKeywords,
+      'socks5Proxy': instance.socks5Proxy,
+      'needCleanCache': instance.needCleanCache,
+      'comicChoice': instance.comicChoice,
+      'disableBika': instance.disableBika,
+      'enableMemoryDebug': instance.enableMemoryDebug,
+      'logAddress': instance.logAddress,
+      'forceEnableImpeller': instance.forceEnableImpeller,
+      'updateAccelerate': instance.updateAccelerate,
+      'oldPageRollbackEnabled': instance.oldPageRollbackEnabled,
+      'searchHistory': instance.searchHistory,
+      'windowWidth': instance.windowWidth,
+      'windowHeight': instance.windowHeight,
+      'windowX': instance.windowX,
+      'windowY': instance.windowY,
+      'readSetting': instance.readSetting.toJson(),
+      'customExportPath': instance.customExportPath,
+      'appLockSetting': instance.appLockSetting.toJson(),
+      'compatibleVersion': instance.compatibleVersion,
+      'cacheSetting': instance.cacheSetting.toJson(),
+      'chineseConvertMode':
+          _$ChineseConvertModeEnumMap[instance.chineseConvertMode]!,
+    };
+
+const _$ThemeModeEnumMap = {
+  ThemeMode.system: 'system',
+  ThemeMode.light: 'light',
+  ThemeMode.dark: 'dark',
+};
+
+const _$ChineseConvertModeEnumMap = {
+  ChineseConvertMode.off: 'off',
+  ChineseConvertMode.simplified: 'simplified',
+  ChineseConvertMode.traditional: 'traditional',
+};
+
+_CacheSettingState _$CacheSettingStateFromJson(Map<String, dynamic> json) =>
+    _CacheSettingState(
+      autoCleanCache: json['autoCleanCache'] as bool? ?? true,
+      cacheSizeLimit: (json['cacheSizeLimit'] as num?)?.toInt() ?? 1073741824,
+    );
+
+Map<String, dynamic> _$CacheSettingStateToJson(_CacheSettingState instance) =>
+    <String, dynamic>{
+      'autoCleanCache': instance.autoCleanCache,
+      'cacheSizeLimit': instance.cacheSizeLimit,
+    };
+
+_AppLockSettingState _$AppLockSettingStateFromJson(Map<String, dynamic> json) =>
+    _AppLockSettingState(
+      enabled: json['enabled'] as bool? ?? false,
+      gesturePasswordHash: json['gesturePasswordHash'] as String? ?? '',
+      resetPinHash: json['resetPinHash'] as String? ?? '',
+    );
+
+Map<String, dynamic> _$AppLockSettingStateToJson(
+  _AppLockSettingState instance,
+) => <String, dynamic>{
+  'enabled': instance.enabled,
+  'gesturePasswordHash': instance.gesturePasswordHash,
+  'resetPinHash': instance.resetPinHash,
+};
+
+_WebDavSettingState _$WebDavSettingStateFromJson(Map<String, dynamic> json) =>
+    _WebDavSettingState(
+      host: json['host'] as String? ?? '',
+      username: json['username'] as String? ?? '',
+      password: json['password'] as String? ?? '',
+    );
+
+Map<String, dynamic> _$WebDavSettingStateToJson(_WebDavSettingState instance) =>
+    <String, dynamic>{
+      'host': instance.host,
+      'username': instance.username,
+      'password': instance.password,
+    };
+
+_S3SettingState _$S3SettingStateFromJson(Map<String, dynamic> json) =>
+    _S3SettingState(
+      endpoint: json['endpoint'] as String? ?? '',
+      accessKey: json['accessKey'] as String? ?? '',
+      secretKey: json['secretKey'] as String? ?? '',
+      bucket: json['bucket'] as String? ?? '',
+      region: json['region'] as String? ?? '',
+      useSSL: json['useSSL'] as bool? ?? true,
+      port: (json['port'] as num?)?.toInt() ?? 0,
+      pathStyle: json['pathStyle'] as bool? ?? false,
+    );
+
+Map<String, dynamic> _$S3SettingStateToJson(_S3SettingState instance) =>
+    <String, dynamic>{
+      'endpoint': instance.endpoint,
+      'accessKey': instance.accessKey,
+      'secretKey': instance.secretKey,
+      'bucket': instance.bucket,
+      'region': instance.region,
+      'useSSL': instance.useSSL,
+      'port': instance.port,
+      'pathStyle': instance.pathStyle,
+    };
+
+_SyncSettingState _$SyncSettingStateFromJson(Map<String, dynamic> json) =>
+    _SyncSettingState(
+      syncServiceType:
+          $enumDecodeNullable(
+            _$SyncServiceTypeEnumMap,
+            json['syncServiceType'],
+          ) ??
+          SyncServiceType.none,
+      webdavSetting: json['webdavSetting'] == null
+          ? const WebDavSettingState()
+          : WebDavSettingState.fromJson(
+              json['webdavSetting'] as Map<String, dynamic>,
+            ),
+      s3Setting: json['s3Setting'] == null
+          ? const S3SettingState()
+          : S3SettingState.fromJson(json['s3Setting'] as Map<String, dynamic>),
+      syncSettings: json['syncSettings'] as bool? ?? false,
+      syncPlugins: json['syncPlugins'] as bool? ?? false,
+      autoSync: json['autoSync'] as bool? ?? true,
+      syncNotify: json['syncNotify'] as bool? ?? true,
+      settingsSyncTime: (json['settingsSyncTime'] as num?)?.toInt() ?? 0,
+    );
+
+Map<String, dynamic> _$SyncSettingStateToJson(_SyncSettingState instance) =>
+    <String, dynamic>{
+      'syncServiceType': _$SyncServiceTypeEnumMap[instance.syncServiceType]!,
+      'webdavSetting': instance.webdavSetting.toJson(),
+      's3Setting': instance.s3Setting.toJson(),
+      'syncSettings': instance.syncSettings,
+      'syncPlugins': instance.syncPlugins,
+      'autoSync': instance.autoSync,
+      'syncNotify': instance.syncNotify,
+      'settingsSyncTime': instance.settingsSyncTime,
+    };
+
+const _$SyncServiceTypeEnumMap = {
+  SyncServiceType.none: 'none',
+  SyncServiceType.webdav: 'webdav',
+  SyncServiceType.s3: 's3',
+};
+
+_ReadSettingState _$ReadSettingStateFromJson(Map<String, dynamic> json) =>
+    _ReadSettingState(
+      noAnimation: json['noAnimation'] as bool? ?? false,
+      comicReadTopContainer: json['comicReadTopContainer'] as bool? ?? true,
+      readMode: (json['readMode'] as num?)?.toInt() ?? 0,
+      tapPageTurnMode:
+          $enumDecodeNullable(
+            _$ReaderTapPageTurnModeEnumMap,
+            json['tapPageTurnMode'],
+          ) ??
+          ReaderTapPageTurnMode.rightHand,
+      readerBackgroundMode:
+          $enumDecodeNullable(
+            _$ReaderBackgroundModeEnumMap,
+            json['readerBackgroundMode'],
+          ) ??
+          ReaderBackgroundMode.auto,
+      readFilterEnabled: json['readFilterEnabled'] as bool? ?? true,
+      readFilterOpacityPercent:
+          (json['readFilterOpacityPercent'] as num?)?.toInt() ?? 50,
+      einkOptimization: json['einkOptimization'] as bool? ?? false,
+      einkDelayMs: (json['einkDelayMs'] as num?)?.toInt() ?? 120,
+      autoScroll: json['autoScroll'] as bool? ?? false,
+      autoScrollColumnIntervalMs:
+          (json['autoScrollColumnIntervalMs'] as num?)?.toInt() ?? 1600,
+      autoScrollPageIntervalMs:
+          (json['autoScrollPageIntervalMs'] as num?)?.toInt() ?? 3000,
+      autoScrollColumnDistancePercent:
+          (json['autoScrollColumnDistancePercent'] as num?)?.toInt() ?? 72,
+      doublePageMode: json['doublePageMode'] as bool? ?? false,
+      sidePaddingEnabled: json['sidePaddingEnabled'] as bool? ?? false,
+      sidePaddingPercent: (json['sidePaddingPercent'] as num?)?.toInt() ?? 10,
+      volumeKeyPageTurn: json['volumeKeyPageTurn'] as bool? ?? true,
+      volumeKeyPageTurnDistancePercent:
+          (json['volumeKeyPageTurnDistancePercent'] as num?)?.toInt() ?? 72,
+      doubleTapZoom: json['doubleTapZoom'] as bool? ?? false,
+      doubleTapOpenMenu: json['doubleTapOpenMenu'] as bool? ?? false,
+      pageInfoShowPage: json['pageInfoShowPage'] as bool? ?? true,
+      pageInfoShowNetwork: json['pageInfoShowNetwork'] as bool? ?? true,
+      pageInfoShowBattery: json['pageInfoShowBattery'] as bool? ?? false,
+      pageInfoShowTime: json['pageInfoShowTime'] as bool? ?? true,
+      pageInfoVerticalPosition:
+          $enumDecodeNullable(
+            _$ReaderInfoVerticalPositionEnumMap,
+            json['pageInfoVerticalPosition'],
+          ) ??
+          ReaderInfoVerticalPosition.bottom,
+      pageInfoTopInStatusBar: json['pageInfoTopInStatusBar'] as bool? ?? false,
+      pageInfoHorizontalPosition:
+          $enumDecodeNullable(
+            _$ReaderInfoHorizontalPositionEnumMap,
+            json['pageInfoHorizontalPosition'],
+          ) ??
+          ReaderInfoHorizontalPosition.left,
+      pageInfoEdgePadding: (json['pageInfoEdgePadding'] as num?)?.toInt() ?? 12,
+      pageInfoOpacityPercent:
+          (json['pageInfoOpacityPercent'] as num?)?.toInt() ?? 82,
+      pageInfoFontSize: (json['pageInfoFontSize'] as num?)?.toInt() ?? 12,
+    );
+
+Map<String, dynamic> _$ReadSettingStateToJson(
+  _ReadSettingState instance,
+) => <String, dynamic>{
+  'noAnimation': instance.noAnimation,
+  'comicReadTopContainer': instance.comicReadTopContainer,
+  'readMode': instance.readMode,
+  'tapPageTurnMode': _$ReaderTapPageTurnModeEnumMap[instance.tapPageTurnMode]!,
+  'readerBackgroundMode':
+      _$ReaderBackgroundModeEnumMap[instance.readerBackgroundMode]!,
+  'readFilterEnabled': instance.readFilterEnabled,
+  'readFilterOpacityPercent': instance.readFilterOpacityPercent,
+  'einkOptimization': instance.einkOptimization,
+  'einkDelayMs': instance.einkDelayMs,
+  'autoScroll': instance.autoScroll,
+  'autoScrollColumnIntervalMs': instance.autoScrollColumnIntervalMs,
+  'autoScrollPageIntervalMs': instance.autoScrollPageIntervalMs,
+  'autoScrollColumnDistancePercent': instance.autoScrollColumnDistancePercent,
+  'doublePageMode': instance.doublePageMode,
+  'sidePaddingEnabled': instance.sidePaddingEnabled,
+  'sidePaddingPercent': instance.sidePaddingPercent,
+  'volumeKeyPageTurn': instance.volumeKeyPageTurn,
+  'volumeKeyPageTurnDistancePercent': instance.volumeKeyPageTurnDistancePercent,
+  'doubleTapZoom': instance.doubleTapZoom,
+  'doubleTapOpenMenu': instance.doubleTapOpenMenu,
+  'pageInfoShowPage': instance.pageInfoShowPage,
+  'pageInfoShowNetwork': instance.pageInfoShowNetwork,
+  'pageInfoShowBattery': instance.pageInfoShowBattery,
+  'pageInfoShowTime': instance.pageInfoShowTime,
+  'pageInfoVerticalPosition':
+      _$ReaderInfoVerticalPositionEnumMap[instance.pageInfoVerticalPosition]!,
+  'pageInfoTopInStatusBar': instance.pageInfoTopInStatusBar,
+  'pageInfoHorizontalPosition':
+      _$ReaderInfoHorizontalPositionEnumMap[instance
+          .pageInfoHorizontalPosition]!,
+  'pageInfoEdgePadding': instance.pageInfoEdgePadding,
+  'pageInfoOpacityPercent': instance.pageInfoOpacityPercent,
+  'pageInfoFontSize': instance.pageInfoFontSize,
+};
+
+const _$ReaderTapPageTurnModeEnumMap = {
+  ReaderTapPageTurnMode.fullScreen: 'fullScreen',
+  ReaderTapPageTurnMode.leftHand: 'leftHand',
+  ReaderTapPageTurnMode.rightHand: 'rightHand',
+};
+
+const _$ReaderBackgroundModeEnumMap = {
+  ReaderBackgroundMode.auto: 'auto',
+  ReaderBackgroundMode.black: 'black',
+  ReaderBackgroundMode.white: 'white',
+  ReaderBackgroundMode.grey: 'grey',
+};
+
+const _$ReaderInfoVerticalPositionEnumMap = {
+  ReaderInfoVerticalPosition.top: 'top',
+  ReaderInfoVerticalPosition.bottom: 'bottom',
+};
+
+const _$ReaderInfoHorizontalPositionEnumMap = {
+  ReaderInfoHorizontalPosition.left: 'left',
+  ReaderInfoHorizontalPosition.center: 'center',
+  ReaderInfoHorizontalPosition.right: 'right',
+};
