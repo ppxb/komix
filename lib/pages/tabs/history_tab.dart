@@ -45,81 +45,46 @@ class _HistoryTabState extends State<HistoryTab> {
   }
 
   Future<void> _openHistory(ReadingProgress progress) async {
-    final provider = ProviderRegistry().getProvider(progress.providerId);
-    if (provider == null) {
+    if (ProviderRegistry().getProvider(progress.providerId) == null) {
       _showMessage('未找到数据源: ${progress.providerId}');
       return;
     }
 
-    try {
-      final results = await Future.wait<Object>([
-        provider.getComicDetail(progress.comicId),
-        provider.getChapters(progress.comicId),
-      ]);
-      if (!mounted) return;
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.black,
+      systemNavigationBarColor: Colors.black,
+      statusBarIconBrightness: Brightness.light,
+      statusBarBrightness: Brightness.dark,
+      systemNavigationBarIconBrightness: Brightness.light,
+    ));
 
-      final comic = results[0] as Comic;
-      final chapters = results[1] as List<Chapter>;
-      if (chapters.isEmpty) {
-        _showMessage('暂无章节');
-        return;
-      }
+    await Navigator.of(context).push(
+      PageRouteBuilder(
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        pageBuilder: (context, animation, secondaryAnimation) {
+          return ColoredBox(
+            color: Colors.black,
+            child: _HistoryReaderEntry(progress: progress),
+          );
+        },
+      ),
+    );
 
-      final matchedIndex = chapters.indexWhere(
-        (chapter) => chapter.id == progress.chapterId,
-      );
-      final chapterIndex = matchedIndex >= 0
-          ? matchedIndex
-          : progress.chapterIndex.clamp(0, chapters.length - 1).toInt();
-      final pageIndex = progress.pageIndex
-          .clamp(0, progress.pageCount - 1)
-          .toInt();
-
-      SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-        statusBarColor: Colors.black,
-        systemNavigationBarColor: Colors.black,
-        statusBarIconBrightness: Brightness.light,
-        statusBarBrightness: Brightness.dark,
-        systemNavigationBarIconBrightness: Brightness.light,
-      ));
-
-      await Navigator.of(context).push(
-        PageRouteBuilder(
-          transitionDuration: Duration.zero,
-          reverseTransitionDuration: Duration.zero,
-          pageBuilder: (context, animation, secondaryAnimation) {
-            return ColoredBox(
-              color: Colors.black,
-              child: ReaderPage(
-                providerId: progress.providerId,
-                comic: comic,
-                chapters: chapters,
-                initialChapterIndex: chapterIndex,
-                initialPageIndex: pageIndex,
-              ),
-            );
-          },
-        ),
-      );
-
-      if (!mounted) return;
-      final theme = Theme.of(context);
-      SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: theme.brightness == Brightness.dark
-            ? Brightness.light
-            : Brightness.dark,
-        statusBarBrightness: theme.brightness,
-        systemNavigationBarColor: theme.colorScheme.surface,
-        systemNavigationBarIconBrightness: theme.brightness == Brightness.dark
-            ? Brightness.light
-            : Brightness.dark,
-      ));
-      await _refreshHistory();
-    } catch (error) {
-      if (!mounted) return;
-      _showMessage(error.toString());
-    }
+    if (!mounted) return;
+    final theme = Theme.of(context);
+    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: theme.brightness == Brightness.dark
+          ? Brightness.light
+          : Brightness.dark,
+      statusBarBrightness: theme.brightness,
+      systemNavigationBarColor: theme.colorScheme.surface,
+      systemNavigationBarIconBrightness: theme.brightness == Brightness.dark
+          ? Brightness.light
+          : Brightness.dark,
+    ));
+    await _refreshHistory();
   }
 
   void _showMessage(String message) {
@@ -183,6 +148,167 @@ class _HistoryTabState extends State<HistoryTab> {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _HistoryReaderEntry extends StatefulWidget {
+  final ReadingProgress progress;
+
+  const _HistoryReaderEntry({required this.progress});
+
+  @override
+  State<_HistoryReaderEntry> createState() => _HistoryReaderEntryState();
+}
+
+class _HistoryReaderEntryState extends State<_HistoryReaderEntry> {
+  late Future<_HistoryReaderData> _readerFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _readerFuture = _loadReaderData();
+  }
+
+  Future<_HistoryReaderData> _loadReaderData() async {
+    final progress = widget.progress;
+    final provider = ProviderRegistry().getProvider(progress.providerId);
+    if (provider == null) {
+      throw StateError('未找到数据源: ${progress.providerId}');
+    }
+
+    final results = await Future.wait<Object>([
+      provider.getComicDetail(progress.comicId),
+      provider.getChapters(progress.comicId),
+    ]);
+    final comic = results[0] as Comic;
+    final chapters = results[1] as List<Chapter>;
+    if (chapters.isEmpty) {
+      throw StateError('暂无章节');
+    }
+
+    final matchedIndex = chapters.indexWhere(
+      (chapter) => chapter.id == progress.chapterId,
+    );
+    final chapterIndex = matchedIndex >= 0
+        ? matchedIndex
+        : progress.chapterIndex.clamp(0, chapters.length - 1).toInt();
+    final maxPageIndex = progress.pageCount > 0 ? progress.pageCount - 1 : 0;
+    final pageIndex = progress.pageIndex.clamp(0, maxPageIndex).toInt();
+
+    return _HistoryReaderData(
+      comic: comic,
+      chapters: chapters,
+      chapterIndex: chapterIndex,
+      pageIndex: pageIndex,
+    );
+  }
+
+  void _retry() {
+    setState(() {
+      _readerFuture = _loadReaderData();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<_HistoryReaderData>(
+      future: _readerFuture,
+      builder: (context, snapshot) {
+        if (snapshot.hasData) {
+          final data = snapshot.requireData;
+          return ReaderPage(
+            providerId: widget.progress.providerId,
+            comic: data.comic,
+            chapters: data.chapters,
+            initialChapterIndex: data.chapterIndex,
+            initialPageIndex: data.pageIndex,
+          );
+        }
+
+        if (snapshot.hasError) {
+          return _HistoryReaderErrorView(
+            message: snapshot.error.toString(),
+            onRetry: _retry,
+          );
+        }
+
+        return const Center(
+          child: CircularProgressIndicator(color: Colors.white),
+        );
+      },
+    );
+  }
+}
+
+class _HistoryReaderData {
+  final Comic comic;
+  final List<Chapter> chapters;
+  final int chapterIndex;
+  final int pageIndex;
+
+  const _HistoryReaderData({
+    required this.comic,
+    required this.chapters,
+    required this.chapterIndex,
+    required this.pageIndex,
+  });
+}
+
+class _HistoryReaderErrorView extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const _HistoryReaderErrorView({
+    required this.message,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.error_outline,
+                size: 48,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white),
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 12,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.of(context).maybePop(),
+                    icon: const Icon(Icons.arrow_back),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                    ),
+                    label: const Text('返回'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('重试'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

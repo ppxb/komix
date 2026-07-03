@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../../providers/provider_registry.dart';
 import '../../../providers/base_provider.dart';
 import '../../../models/comic.dart';
+import '../../comic_detail_page.dart';
 
 /// 订阅页 - 管理和浏览不同的内置源
 class SubscribePage extends StatefulWidget {
@@ -173,25 +174,31 @@ class _SubscribePageState extends State<SubscribePage>
         padding: const EdgeInsets.all(16),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 3,
-          childAspectRatio: 0.65,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
+          childAspectRatio: 0.6,
+          crossAxisSpacing: 8,
+          mainAxisSpacing: 8,
         ),
         itemCount: comics.length,
         itemBuilder: (context, index) {
-          return _buildComicCard(comics[index]);
+          return _buildComicCard(provider.id, comics[index]);
         },
       ),
     );
   }
 
-  Widget _buildComicCard(Comic comic) {
+  Widget _buildComicCard(String providerId, Comic comic) {
     return Card(
       clipBehavior: Clip.antiAlias,
-      elevation: 2,
       child: InkWell(
         onTap: () {
-          // TODO: 导航到详情页
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ComicDetailPage(
+                providerId: providerId,
+                initialComic: comic,
+              ),
+            ),
+          );
         },
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -214,24 +221,14 @@ class _SubscribePageState extends State<SubscribePage>
             // 标题
             Padding(
               padding: const EdgeInsets.all(8.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    comic.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${comic.views} 浏览',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                  ),
-                ],
+              child: Text(
+                comic.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
           ],

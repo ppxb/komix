@@ -25,6 +25,10 @@ import '../reader/reader_keyboard_shortcuts.dart';
 import '../reader/reader_settings_sheet.dart';
 import '../reader/reader_volume_controller.dart';
 
+part 'reader_page_content.dart';
+part 'reader_page_overlays.dart';
+part 'reader_page_status_views.dart';
+
 const _readerSystemOverlayStyle = SystemUiOverlayStyle(
   statusBarColor: Colors.black,
   systemNavigationBarColor: Colors.black,
@@ -594,12 +598,13 @@ class _ReaderPageState extends State<ReaderPage> {
     _imageSizeCubit?.updateSize(index, size);
     if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      if (!mounted || _isSeeking) return;
       final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
+      if (!isColumnReadMode(readSetting.readMode)) return;
       final slotIndex = _effectiveDoublePageEnabled(readSetting)
           ? index ~/ 2
           : index;
-      if (_isSeeking || _isRestoringInitialPage || slotIndex <= _pageIndex) {
+      if (_isRestoringInitialPage && slotIndex <= _pageIndex) {
         _schedulePageCorrection(_pageIndex);
       }
     });
@@ -618,6 +623,70 @@ class _ReaderPageState extends State<ReaderPage> {
       return;
     }
 
+    _jumpToColumnPage(targetPage, correctAfterLayout: correctAfterLayout);
+  }
+
+  void _jumpToColumnPage(
+    int targetPage, {
+    required bool correctAfterLayout,
+  }) {
+    if (!_scrollController.hasClients) return;
+    if (_jumpToBuiltColumnSlot(targetPage)) {
+      if (correctAfterLayout) {
+        _schedulePageCorrection(targetPage);
+      }
+      return;
+    }
+
+    try {
+      final future = _observerController.jumpTo(
+        index: targetPage,
+        alignment: 0,
+      );
+      unawaited(
+        future.then<void>(
+          (_) {
+            if (!mounted) return;
+            if (correctAfterLayout) {
+              _schedulePageCorrection(targetPage);
+            }
+          },
+          onError: (_) {
+            if (!mounted) return;
+            _jumpToEstimatedColumnOffset(
+              targetPage,
+              correctAfterLayout: correctAfterLayout,
+            );
+          },
+        ),
+      );
+    } catch (_) {
+      _jumpToEstimatedColumnOffset(
+        targetPage,
+        correctAfterLayout: correctAfterLayout,
+      );
+    }
+  }
+
+  bool _jumpToBuiltColumnSlot(int targetPage) {
+    if (targetPage < 0 || targetPage >= _slotKeys.length) return false;
+
+    final pageContext = _slotKeys[targetPage].currentContext;
+    if (pageContext == null) return false;
+
+    Scrollable.ensureVisible(
+      pageContext,
+      alignment: 0,
+      duration: Duration.zero,
+      curve: Curves.linear,
+    );
+    return true;
+  }
+
+  void _jumpToEstimatedColumnOffset(
+    int targetPage, {
+    required bool correctAfterLayout,
+  }) {
     if (!_scrollController.hasClients) return;
     final position = _scrollController.position;
     final target = _estimatedPageOffset(
@@ -633,10 +702,10 @@ class _ReaderPageState extends State<ReaderPage> {
   void _schedulePageCorrection(int pageIndex) {
     _pageCorrectionTimer?.cancel();
     _pageCorrectionTimer = Timer(const Duration(milliseconds: 80), () {
-      if (!mounted || !_scrollController.hasClients) return;
+      if (!mounted || _isSeeking || !_scrollController.hasClients) return;
       _correctToPage(pageIndex);
       _pageCorrectionTimer = Timer(const Duration(milliseconds: 260), () {
-        if (!mounted || !_scrollController.hasClients) return;
+        if (!mounted || _isSeeking || !_scrollController.hasClients) return;
         _correctToPage(pageIndex);
       });
     });
@@ -652,18 +721,9 @@ class _ReaderPageState extends State<ReaderPage> {
     final target = pageIndex.clamp(0, _lastPageIndex).toInt();
     if (target < 0 || target >= _slotKeys.length) return;
 
-    final pageContext = _slotKeys[target].currentContext;
-    if (pageContext == null) {
+    if (!_jumpToBuiltColumnSlot(target)) {
       _jumpToPage(target);
-      return;
     }
-
-    Scrollable.ensureVisible(
-      pageContext,
-      alignment: 0,
-      duration: Duration.zero,
-      curve: Curves.linear,
-    );
   }
 
   void _scheduleProgressSave() {
@@ -757,6 +817,7 @@ class _ReaderPageState extends State<ReaderPage> {
 
   void _handleProgressChangeStart(double value) {
     _progressSaveTimer?.cancel();
+    _pageCorrectionTimer?.cancel();
     _stopAutoRead();
     _isSeeking = true;
     _readerCubit.updateSliderRolling(true);
@@ -783,7 +844,7 @@ class _ReaderPageState extends State<ReaderPage> {
       _pageIndex = pageIndex;
     });
     _readerCubit.updatePageIndex(pageIndex);
-    _jumpToPage(pageIndex, correctAfterLayout: true);
+    _jumpToPage(pageIndex);
     unawaited(_saveProgressNow());
     _syncAutoRead(context.read<GlobalSettingCubit>().state.readSetting);
   }
@@ -1318,785 +1379,6 @@ class _ReaderPageState extends State<ReaderPage> {
                 ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReaderAutoReadButton extends StatelessWidget {
-  final bool isMenuVisible;
-  final bool isPaused;
-  final VoidCallback onPressed;
-
-  const _ReaderAutoReadButton({
-    required this.isMenuVisible,
-    required this.isPaused,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomPadding = MediaQuery.paddingOf(context).bottom;
-    return AnimatedPositioned(
-      duration: const Duration(milliseconds: 240),
-      curve: Curves.easeOutCubic,
-      right: 16,
-      bottom: (isMenuVisible ? 104.0 : 16.0) + bottomPadding,
-      child: FloatingActionButton.small(
-        heroTag: 'reader_auto_read_toggle',
-        tooltip: isPaused ? '继续自动阅读' : '暂停自动阅读',
-        onPressed: onPressed,
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 180),
-          child: Icon(
-            isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-            key: ValueKey(isPaused),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReaderTopBar extends StatelessWidget {
-  final String title;
-  final String chapterTitle;
-  final bool isVisible;
-  final VoidCallback onRefresh;
-
-  const _ReaderTopBar({
-    required this.title,
-    required this.chapterTitle,
-    required this.isVisible,
-    required this.onRefresh,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return Positioned(
-      top: 0,
-      left: 0,
-      right: 0,
-      child: IgnorePointer(
-        ignoring: !isVisible,
-        child: AnimatedSlide(
-          duration: const Duration(milliseconds: 240),
-          curve: Curves.easeOutCubic,
-          offset: isVisible ? Offset.zero : const Offset(0, -1),
-          child: ClipRect(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-              child: Material(
-                color: colorScheme.surface.withValues(alpha: 0.78),
-                elevation: isVisible ? 2 : 0,
-                child: SafeArea(
-                  bottom: false,
-                  child: SizedBox(
-                    height: 64,
-                    child: Row(
-                      children: [
-                        const BackButton(),
-                        Expanded(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                              Text(
-                                chapterTitle,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(
-                                      color: colorScheme.onSurfaceVariant,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: '刷新',
-                          onPressed: onRefresh,
-                          icon: const Icon(Icons.refresh),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReaderBottomOverlay extends StatelessWidget {
-  final bool isVisible;
-  final Widget child;
-
-  const _ReaderBottomOverlay({required this.isVisible, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 0,
-      child: IgnorePointer(
-        ignoring: !isVisible,
-        child: AnimatedSlide(
-          duration: const Duration(milliseconds: 240),
-          curve: Curves.easeOutCubic,
-          offset: isVisible ? Offset.zero : const Offset(0, 1),
-          child: SafeArea(top: false, child: child),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReaderColumnImageList extends StatelessWidget {
-  final List<GlobalKey> pageKeys;
-  final List<GlobalKey> slotKeys;
-  final String providerId;
-  final String comicId;
-  final String chapterId;
-  final List<ReaderPageImage> pages;
-  final ScrollController controller;
-  final ListObserverController observerController;
-  final bool enableDoublePage;
-  final bool isRtl;
-  final Color backgroundColor;
-  final ValueChanged<int> onPageObserved;
-  final void Function(int index, Size size) onSizeResolved;
-
-  const _ReaderColumnImageList({
-    required this.pageKeys,
-    required this.slotKeys,
-    required this.providerId,
-    required this.comicId,
-    required this.chapterId,
-    required this.pages,
-    required this.controller,
-    required this.observerController,
-    required this.enableDoublePage,
-    required this.isRtl,
-    required this.backgroundColor,
-    required this.onPageObserved,
-    required this.onSizeResolved,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final readSetting = context.select(
-      (GlobalSettingCubit cubit) => cubit.state.readSetting,
-    );
-    final slotCount = getReadModeSlotCount(
-      imageCount: pages.length,
-      enableDoublePage: enableDoublePage,
-    );
-    final listView = ListView.builder(
-      controller: controller,
-      cacheExtent: MediaQuery.sizeOf(context).height * 2,
-      padding: const EdgeInsets.only(bottom: 16),
-      itemCount: slotCount,
-      itemBuilder: (context, index) {
-        if (enableDoublePage) {
-          return _buildDoublePageSlot(context, index, readSetting);
-        }
-        return _buildSinglePageSlot(context, index, readSetting);
-      },
-    );
-
-    return ListViewObserver(
-      controller: observerController,
-      onObserve: (resultMap) {
-        final visibleIndexes = resultMap.displayingChildIndexList;
-        if (visibleIndexes.isEmpty) return;
-        onPageObserved(visibleIndexes[visibleIndexes.length ~/ 2]);
-      },
-      child: listView,
-    );
-  }
-
-  Widget _buildSinglePageSlot(
-    BuildContext context,
-    int index,
-    ReadSettingState readSetting,
-  ) {
-    final page = pages[index];
-    return BlocSelector<
-      ImageSizeCubit,
-      ImageSizeState,
-      ({Size size, bool isCached})
-    >(
-      selector: (state) => (
-        size: state.getSizeValue(index),
-        isCached: state.resolvedIndices.contains(index),
-      ),
-      builder: (context, cached) {
-        final containerWidth = MediaQuery.sizeOf(context).width;
-        final width = getConstrainedImageWidth(
-          containerWidth: containerWidth,
-          enableSidePadding: readSetting.sidePaddingEnabled,
-          sidePaddingPercent: readSetting.sidePaddingPercent,
-        );
-        final displayHeight = cached.size.width > 0 && cached.size.height > 0
-            ? width * cached.size.height / cached.size.width
-            : width * _ReaderPageState._estimatedPageAspectRatio;
-        return SizedBox(
-          key: index < slotKeys.length ? slotKeys[index] : null,
-          width: containerWidth,
-          child: ColoredBox(
-            color: backgroundColor,
-            child: Center(
-              child: ReaderImageView(
-                key: index < pageKeys.length ? pageKeys[index] : null,
-                request: _requestFor(page),
-                pageNumber: index + 1,
-                pageCount: pages.length,
-                displaySize: Size(width, displayHeight),
-                isSizeResolved: cached.isCached,
-                onSizeResolved: (size) => onSizeResolved(index, size),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildDoublePageSlot(
-    BuildContext context,
-    int slotIndex,
-    ReadSettingState readSetting,
-  ) {
-    const panelGap = 6.0;
-    final leftIndex = slotIndex * 2;
-    final rightIndex = leftIndex + 1;
-    final containerWidth = MediaQuery.sizeOf(context).width;
-    final contentWidth = getConstrainedImageWidth(
-      containerWidth: containerWidth,
-      enableSidePadding: readSetting.sidePaddingEnabled,
-      sidePaddingPercent: readSetting.sidePaddingPercent,
-    );
-    final panelWidth = ((contentWidth - panelGap) / 2)
-        .clamp(1.0, contentWidth)
-        .toDouble();
-
-    return BlocSelector<ImageSizeCubit, ImageSizeState, (Size, Size, bool, bool)>(
-      selector: (state) => (
-        state.getSizeValue(leftIndex),
-        rightIndex < pages.length
-            ? state.getSizeValue(rightIndex)
-            : const Size(0, 0),
-        state.resolvedIndices.contains(leftIndex),
-        state.resolvedIndices.contains(rightIndex),
-      ),
-      builder: (context, cached) {
-        final leftHeight = _displayHeightFor(cached.$1, panelWidth);
-        final rightHeight = rightIndex < pages.length
-            ? _displayHeightFor(cached.$2, panelWidth)
-            : 0.0;
-        final slotHeight = (leftHeight > rightHeight ? leftHeight : rightHeight)
-            .clamp(1.0, double.infinity)
-            .toDouble();
-
-        final leftChild = _buildPanelImage(
-          index: leftIndex,
-          width: panelWidth,
-          height: slotHeight,
-          isSizeResolved: cached.$3,
-        );
-        final rightChild = rightIndex < pages.length
-            ? _buildPanelImage(
-                index: rightIndex,
-                width: panelWidth,
-                height: slotHeight,
-                isSizeResolved: cached.$4,
-              )
-            : SizedBox(width: panelWidth, height: slotHeight);
-        final children = isRtl
-            ? [rightChild, const SizedBox(width: panelGap), leftChild]
-            : [leftChild, const SizedBox(width: panelGap), rightChild];
-
-        return SizedBox(
-          key: slotIndex < slotKeys.length ? slotKeys[slotIndex] : null,
-          width: containerWidth,
-          height: slotHeight,
-          child: ColoredBox(
-            color: backgroundColor,
-            child: Center(
-              child: SizedBox(
-                width: contentWidth,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: children,
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildPanelImage({
-    required int index,
-    required double width,
-    required double height,
-    required bool isSizeResolved,
-  }) {
-    final page = pages[index];
-    return SizedBox(
-      width: width,
-      height: height,
-      child: ReaderImageView(
-        key: index < pageKeys.length ? pageKeys[index] : null,
-        request: _requestFor(page),
-        pageNumber: index + 1,
-        pageCount: pages.length,
-        displaySize: Size(width, height),
-        isSizeResolved: isSizeResolved,
-        onSizeResolved: (size) => onSizeResolved(index, size),
-      ),
-    );
-  }
-
-  double _displayHeightFor(Size cachedSize, double width) {
-    if (cachedSize.width > 0 && cachedSize.height > 0) {
-      return width * cachedSize.height / cachedSize.width;
-    }
-    return width * _ReaderPageState._estimatedPageAspectRatio;
-  }
-
-  ReaderImageRequest _requestFor(ReaderPageImage page) {
-    return ReaderImageRequest(
-      providerId: providerId,
-      comicId: comicId,
-      chapterId: chapterId,
-      pageId: page.id,
-      url: page.url,
-      path: page.path,
-      extern: page.extern,
-    );
-  }
-}
-
-class _ReaderRowImagePager extends StatelessWidget {
-  final List<GlobalKey> pageKeys;
-  final String providerId;
-  final String comicId;
-  final String chapterId;
-  final List<ReaderPageImage> pages;
-  final PageController controller;
-  final bool enableDoublePage;
-  final bool isRtl;
-  final Color backgroundColor;
-  final ValueChanged<int> onPageChanged;
-  final void Function(int index, Size size) onSizeResolved;
-
-  const _ReaderRowImagePager({
-    required this.pageKeys,
-    required this.providerId,
-    required this.comicId,
-    required this.chapterId,
-    required this.pages,
-    required this.controller,
-    required this.enableDoublePage,
-    required this.isRtl,
-    required this.backgroundColor,
-    required this.onPageChanged,
-    required this.onSizeResolved,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final readSetting = context.select(
-      (GlobalSettingCubit cubit) => cubit.state.readSetting,
-    );
-    final slotCount = getReadModeSlotCount(
-      imageCount: pages.length,
-      enableDoublePage: enableDoublePage,
-    );
-
-    return PageView.builder(
-      controller: controller,
-      reverse: isRtl,
-      itemCount: slotCount,
-      onPageChanged: onPageChanged,
-      itemBuilder: (context, slotIndex) {
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            final pageWidth = constraints.maxWidth;
-            final pageHeight = constraints.maxHeight;
-            final contentWidth = getConstrainedImageWidth(
-              containerWidth: pageWidth,
-              enableSidePadding: readSetting.sidePaddingEnabled,
-              sidePaddingPercent: readSetting.sidePaddingPercent,
-            );
-            if (enableDoublePage) {
-              return _buildDoublePage(
-                slotIndex: slotIndex,
-                pageWidth: pageWidth,
-                pageHeight: pageHeight,
-                contentWidth: contentWidth,
-              );
-            }
-            return _buildSinglePage(
-              imageIndex: slotIndex,
-              pageWidth: pageWidth,
-              pageHeight: pageHeight,
-              contentWidth: contentWidth,
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildSinglePage({
-    required int imageIndex,
-    required double pageWidth,
-    required double pageHeight,
-    required double contentWidth,
-  }) {
-    return SizedBox(
-      width: pageWidth,
-      height: pageHeight,
-      child: ColoredBox(
-        color: backgroundColor,
-        child: Center(
-          child: _buildImage(
-            imageIndex: imageIndex,
-            width: contentWidth,
-            height: pageHeight,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDoublePage({
-    required int slotIndex,
-    required double pageWidth,
-    required double pageHeight,
-    required double contentWidth,
-  }) {
-    const panelGap = 6.0;
-    final leftIndex = slotIndex * 2;
-    final rightIndex = leftIndex + 1;
-    final panelWidth = ((contentWidth - panelGap) / 2)
-        .clamp(1.0, contentWidth)
-        .toDouble();
-    final leftChild = _buildImage(
-      imageIndex: leftIndex,
-      width: panelWidth,
-      height: pageHeight,
-    );
-    final rightChild = rightIndex < pages.length
-        ? _buildImage(
-            imageIndex: rightIndex,
-            width: panelWidth,
-            height: pageHeight,
-          )
-        : SizedBox(width: panelWidth, height: pageHeight);
-    final children = isRtl
-        ? [rightChild, const SizedBox(width: panelGap), leftChild]
-        : [leftChild, const SizedBox(width: panelGap), rightChild];
-
-    return SizedBox(
-      width: pageWidth,
-      height: pageHeight,
-      child: ColoredBox(
-        color: backgroundColor,
-        child: Center(
-          child: SizedBox(
-            width: contentWidth,
-            child: Row(children: children),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildImage({
-    required int imageIndex,
-    required double width,
-    required double height,
-  }) {
-    final page = pages[imageIndex];
-    return BlocSelector<ImageSizeCubit, ImageSizeState, bool>(
-      selector: (state) => state.resolvedIndices.contains(imageIndex),
-      builder: (context, isSizeResolved) {
-        return SizedBox(
-          width: width,
-          height: height,
-          child: ReaderImageView(
-            key: imageIndex < pageKeys.length ? pageKeys[imageIndex] : null,
-            request: ReaderImageRequest(
-              providerId: providerId,
-              comicId: comicId,
-              chapterId: chapterId,
-              pageId: page.id,
-              url: page.url,
-              path: page.path,
-              extern: page.extern,
-            ),
-            pageNumber: imageIndex + 1,
-            pageCount: pages.length,
-            displaySize: Size(width, height),
-            isSizeResolved: isSizeResolved,
-            onSizeResolved: (size) => onSizeResolved(imageIndex, size),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _ReaderBottomBar extends StatelessWidget {
-  final int chapterCount;
-  final int pageIndex;
-  final int pageCount;
-  final bool hasPrevious;
-  final bool hasNext;
-  final ValueChanged<double> onProgressChangeStart;
-  final ValueChanged<double> onProgressChanged;
-  final ValueChanged<double> onProgressChangeEnd;
-  final VoidCallback onPrevious;
-  final VoidCallback onChapterPicker;
-  final VoidCallback onSettings;
-  final VoidCallback onNext;
-
-  const _ReaderBottomBar({
-    required this.chapterCount,
-    required this.pageIndex,
-    required this.pageCount,
-    required this.hasPrevious,
-    required this.hasNext,
-    required this.onProgressChangeStart,
-    required this.onProgressChanged,
-    required this.onProgressChangeEnd,
-    required this.onPrevious,
-    required this.onChapterPicker,
-    required this.onSettings,
-    required this.onNext,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final maxPage = pageCount > 0 ? pageCount - 1 : 0;
-    final sliderValue = pageIndex.clamp(0, maxPage).toDouble();
-    final pageLabel = pageCount == 0
-        ? '暂无页数'
-        : '第 ${pageIndex.clamp(0, maxPage) + 1} / $pageCount 页';
-
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: Material(
-          color: colorScheme.surface.withValues(alpha: 0.78),
-          elevation: 3,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(
-                  height: 24,
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 2,
-                      thumbShape: const RoundSliderThumbShape(
-                        enabledThumbRadius: 5,
-                      ),
-                      overlayShape: const RoundSliderOverlayShape(
-                        overlayRadius: 12,
-                      ),
-                    ),
-                    child: Slider(
-                      value: sliderValue,
-                      min: 0,
-                      max: maxPage.toDouble(),
-                      divisions: maxPage > 0 ? maxPage : null,
-                      onChangeStart: pageCount > 1
-                          ? onProgressChangeStart
-                          : null,
-                      onChanged: pageCount > 1 ? onProgressChanged : null,
-                      onChangeEnd: pageCount > 1 ? onProgressChangeEnd : null,
-                    ),
-                  ),
-                ),
-                Text(
-                  pageLabel,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                    height: 1,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                SizedBox(
-                  height: 40,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      _ReaderBottomIconButton(
-                        tooltip: '上一章',
-                        onPressed: hasPrevious ? onPrevious : null,
-                        icon: Icons.skip_previous,
-                      ),
-                      const SizedBox(width: 18),
-                      _ReaderBottomIconButton(
-                        tooltip: '章节列表',
-                        onPressed: chapterCount > 0 ? onChapterPicker : null,
-                        icon: Icons.format_list_bulleted,
-                      ),
-                      const SizedBox(width: 18),
-                      _ReaderBottomIconButton(
-                        tooltip: '阅读设置',
-                        onPressed: onSettings,
-                        icon: Icons.tune,
-                      ),
-                      const SizedBox(width: 18),
-                      _ReaderBottomIconButton(
-                        tooltip: '下一章',
-                        onPressed: hasNext ? onNext : null,
-                        icon: Icons.skip_next,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReaderBottomIconButton extends StatelessWidget {
-  final String tooltip;
-  final VoidCallback? onPressed;
-  final IconData icon;
-
-  const _ReaderBottomIconButton({
-    required this.tooltip,
-    required this.onPressed,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return IconButton(
-      tooltip: tooltip,
-      onPressed: onPressed,
-      visualDensity: VisualDensity.compact,
-      style: IconButton.styleFrom(
-        fixedSize: const Size.square(40),
-        minimumSize: const Size.square(40),
-        padding: EdgeInsets.zero,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ),
-      icon: Icon(icon, size: 22),
-    );
-  }
-}
-
-class _ReaderEmptyView extends StatelessWidget {
-  final VoidCallback onRetry;
-
-  const _ReaderEmptyView({required this.onRetry});
-
-  @override
-  Widget build(BuildContext context) {
-    const foregroundColor = Colors.white;
-    const secondaryColor = Colors.white70;
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.image_not_supported_outlined,
-              size: 48,
-              color: secondaryColor,
-            ),
-            const SizedBox(height: 16),
-            const Text('暂无图片', style: TextStyle(color: foregroundColor)),
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh),
-              style: OutlinedButton.styleFrom(foregroundColor: secondaryColor),
-              label: const Text('重试'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ReaderChapterData {
-  final ReaderChapterSnapshot snapshot;
-  final Map<int, Size> persistedSizes;
-
-  const _ReaderChapterData({
-    required this.snapshot,
-    required this.persistedSizes,
-  });
-}
-
-class _ReaderErrorView extends StatelessWidget {
-  final String message;
-  final VoidCallback onRetry;
-
-  const _ReaderErrorView({required this.message, required this.onRetry});
-
-  @override
-  Widget build(BuildContext context) {
-    const foregroundColor = Colors.white;
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.error_outline,
-              size: 48,
-              color: Theme.of(context).colorScheme.error,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: foregroundColor),
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh),
-              label: const Text('重试'),
-            ),
-          ],
         ),
       ),
     );
