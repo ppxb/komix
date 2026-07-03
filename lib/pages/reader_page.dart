@@ -23,6 +23,7 @@ import '../reader/reader_layout.dart';
 import '../reader/reader_page_info_overlay.dart';
 import '../reader/reader_keyboard_shortcuts.dart';
 import '../reader/reader_settings_sheet.dart';
+import '../reader/reader_volume_controller.dart';
 
 const _readerSystemOverlayStyle = SystemUiOverlayStyle(
   statusBarColor: Colors.black,
@@ -73,6 +74,7 @@ class _ReaderPageState extends State<ReaderPage> {
   late final TransformationController _transformationController;
   late final FocusNode _readerFocusNode;
   late final ReaderActionController _actionController;
+  late final ReaderVolumeController _volumeController;
   late final ReaderHistoryManager _historyManager;
   final ScrollController _scrollController = ScrollController();
   ImageSizeCubit? _imageSizeCubit;
@@ -118,6 +120,10 @@ class _ReaderPageState extends State<ReaderPage> {
       pageController: _pageController,
       onBeforeTurnPage: _restoreScaleBeforeTurnPage,
     );
+    _volumeController = ReaderVolumeController(
+      actionController: _actionController,
+    );
+    _volumeController.listen();
     _historyManager = ReaderHistoryManager(
       providerId: widget.providerId,
       comic: widget.comic,
@@ -161,6 +167,7 @@ class _ReaderPageState extends State<ReaderPage> {
     _pageController.dispose();
     _transformationController.dispose();
     _readerFocusNode.dispose();
+    _volumeController.dispose();
     _historyManager.stop();
     unawaited(_imageSizeCubit?.close());
     unawaited(_readerCubit.close());
@@ -180,6 +187,9 @@ class _ReaderPageState extends State<ReaderPage> {
 
     _applySystemUiVisibility(visible);
     _syncAutoRead(context.read<GlobalSettingCubit>().state.readSetting);
+    _syncVolumeKeyInterception(
+      context.read<GlobalSettingCubit>().state.readSetting,
+    );
   }
 
   void _applySystemUiVisibility(bool visible) {
@@ -230,6 +240,14 @@ class _ReaderPageState extends State<ReaderPage> {
       if (!mounted || _isMenuVisible || _isSeeking) return;
       _actionController.onAutoReadTick();
     });
+  }
+
+  void _syncVolumeKeyInterception(ReadSettingState readSetting) {
+    if (readSetting.volumeKeyPageTurn && !_isMenuVisible) {
+      _volumeController.enableInterception();
+    } else {
+      _volumeController.disableInterception();
+    }
   }
 
   void _hideEinkMask() {
@@ -1100,6 +1118,7 @@ class _ReaderPageState extends State<ReaderPage> {
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             if (mounted) {
                               _syncAutoRead(readSetting);
+                              _syncVolumeKeyInterception(readSetting);
                             }
                           });
                           _scheduleInitialPageRestore();

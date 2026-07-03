@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -280,6 +282,35 @@ class _GestureSection extends StatelessWidget {
               );
             },
           ),
+          if (Platform.isAndroid)
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('音量键翻页'),
+              subtitle: const Text('音量下翻下一页，音量上翻上一页'),
+              value: setting.volumeKeyPageTurn,
+              onChanged: (value) {
+                cubit.updateReadSetting(
+                  (current) => current.copyWith(volumeKeyPageTurn: value),
+                );
+              },
+            ),
+          if (Platform.isAndroid && setting.volumeKeyPageTurn)
+            _SliderRow(
+              label: '音量键',
+              value: setting.volumeKeyPageTurnDistancePercent
+                  .clamp(10, 100)
+                  .toInt(),
+              min: 10,
+              max: 100,
+              divisions: 90,
+              suffix: '%屏',
+              onChanged: (value) {
+                cubit.updateReadSetting(
+                  (current) =>
+                      current.copyWith(volumeKeyPageTurnDistancePercent: value),
+                );
+              },
+            ),
         ],
       ),
     );
