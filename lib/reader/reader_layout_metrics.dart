@@ -39,8 +39,11 @@ class ReaderLayoutMetrics {
     ReadSettingState readSetting, {
     BuildContext? buildContext,
   }) {
-    final contextForSize = buildContext ?? context;
-    final size = MediaQuery.maybeSizeOf(contextForSize);
+    final size = buildContext != null
+        ? MediaQuery.maybeSizeOf(buildContext)
+        : isMounted()
+            ? MediaQuery.maybeSizeOf(context)
+            : null;
     final isCompact = size != null && size.shortestSide < 600;
     return readSetting.doublePageMode && !isCompact;
   }
@@ -87,6 +90,7 @@ class ReaderLayoutMetrics {
   }
 
   double readerContentWidth() {
+    if (!isMounted()) return 0;
     final containerWidth = _readerPageWidth();
     if (containerWidth <= 0) return 0;
     final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
@@ -98,6 +102,7 @@ class ReaderLayoutMetrics {
   }
 
   double estimatedPageOffset(int pageIndex) {
+    if (!isMounted()) return 0;
     final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
     final enableDoublePage = effectiveDoublePageEnabled(readSetting);
     final width = readerContentWidth();

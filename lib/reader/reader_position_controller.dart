@@ -49,7 +49,7 @@ class ReaderPositionController {
   }
 
   void jumpToPage(int pageIndex, {bool correctAfterLayout = false}) {
-    if (!hasPages()) return;
+    if (!isMounted() || !hasPages()) return;
 
     final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
     final targetPage = pageIndex.clamp(0, lastPageIndex()).toInt();
@@ -153,6 +153,7 @@ class ReaderPositionController {
   }
 
   void _correctToPage(int pageIndex) {
+    if (!isMounted()) return;
     final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
     if (!isColumnReadMode(readSetting.readMode)) {
       jumpToPage(pageIndex);

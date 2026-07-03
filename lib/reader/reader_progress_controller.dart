@@ -78,13 +78,13 @@ class ReaderProgressController {
   }
 
   void handleObservedPageIndex(int pageIndex) {
-    if (_isSeeking || !hasPages()) return;
+    if (!isMounted() || _isSeeking || !hasPages()) return;
     _syncPageIndex(pageIndex);
     scheduleSave();
   }
 
   void handlePagedPageChanged(int pageIndex) {
-    if (_isSeeking || !hasPages()) return;
+    if (!isMounted() || _isSeeking || !hasPages()) return;
 
     _syncPageIndex(pageIndex);
     scheduleSave();
@@ -97,6 +97,7 @@ class ReaderProgressController {
   }
 
   void handleProgressChangeStart(double _) {
+    if (!isMounted()) return;
     cancelPendingSave();
     positionController.cancelCorrection();
     sideEffects.stopAutoRead();
@@ -107,6 +108,7 @@ class ReaderProgressController {
   }
 
   void handleProgressChanged(double value) {
+    if (!isMounted()) return;
     final pageIndex = _clampPageIndex(value.round());
     if (pageIndex == currentPageIndex()) return;
     setPageIndex(pageIndex);
@@ -115,6 +117,7 @@ class ReaderProgressController {
   }
 
   void handleProgressChangeEnd(double value) {
+    if (!isMounted()) return;
     final pageIndex = _clampPageIndex(value.round());
     _isSeeking = false;
     readerCubit.updateSliderRolling(false);

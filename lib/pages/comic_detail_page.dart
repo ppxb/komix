@@ -194,6 +194,10 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
   }) {
     if (chapters.isEmpty) return;
 
+    final returnSystemUiStyle = _detailSystemUiOverlayStyle(
+      Theme.of(context),
+      _isAppBarOpaque,
+    );
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(
         statusBarColor: Colors.black,
@@ -228,25 +232,28 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
           setState(() {
             _progressFuture = _loadProgress();
           });
-          final theme = Theme.of(context);
-          final appBarBackground = _isAppBarOpaque
-              ? theme.colorScheme.surface
-              : Colors.transparent;
-          SystemChrome.setSystemUIOverlayStyle(
-            SystemUiOverlayStyle(
-              statusBarColor: appBarBackground,
-              statusBarIconBrightness: theme.brightness == Brightness.dark
-                  ? Brightness.light
-                  : Brightness.dark,
-              statusBarBrightness: theme.brightness,
-              systemNavigationBarColor: theme.colorScheme.surface,
-              systemNavigationBarIconBrightness:
-                  theme.brightness == Brightness.dark
-                  ? Brightness.light
-                  : Brightness.dark,
-            ),
-          );
+          SystemChrome.setSystemUIOverlayStyle(returnSystemUiStyle);
         });
+  }
+
+  SystemUiOverlayStyle _detailSystemUiOverlayStyle(
+    ThemeData theme,
+    bool isAppBarOpaque,
+  ) {
+    final appBarBackground = isAppBarOpaque
+        ? theme.colorScheme.surface
+        : Colors.transparent;
+    return SystemUiOverlayStyle(
+      statusBarColor: appBarBackground,
+      statusBarIconBrightness: theme.brightness == Brightness.dark
+          ? Brightness.light
+          : Brightness.dark,
+      statusBarBrightness: theme.brightness,
+      systemNavigationBarColor: theme.colorScheme.surface,
+      systemNavigationBarIconBrightness: theme.brightness == Brightness.dark
+          ? Brightness.light
+          : Brightness.dark,
+    );
   }
 
   void _openReaderFromProgress(

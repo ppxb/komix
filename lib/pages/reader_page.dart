@@ -97,12 +97,16 @@ class _ReaderPageState extends State<ReaderPage> {
   ReadSettingState? _pendingMetricsReadSetting;
   TapDownDetails? _tapDownDetails;
   TapDownDetails? _doubleTapDownDetails;
+  bool _isElementActive = true;
+  bool _isDisposing = false;
+  int _lastKnownSlotCount = 0;
 
   ImageSizeCubit? get _imageSizeCubit => _chapterView.imageSizeCubit;
   List<GlobalKey> get _pageKeys => _chapterView.pageKeys;
   List<GlobalKey> get _slotKeys => _chapterView.slotKeys;
   ReaderChapterSnapshot? get _chapterSnapshot => _chapterView.snapshot;
   List<ReaderPageImage> get _chapterPages => _chapterView.pages;
+  bool get _canUseContext => mounted && _isElementActive && !_isDisposing;
 
   @override
   void initState() {
@@ -119,13 +123,14 @@ class _ReaderPageState extends State<ReaderPage> {
     _layoutMetrics = ReaderLayoutMetrics(
       context: context,
       scrollController: _scrollController,
-      isMounted: () => mounted,
+      isMounted: () => _canUseContext,
       pages: () => _chapterPages,
       imageSizeCubit: () => _imageSizeCubit,
       defaultAspectRatio: _estimatedPageAspectRatio,
     );
     _actionController = ReaderActionController(
       context: context,
+      isActive: () => _canUseContext,
       scrollController: _scrollController,
       observerController: _observerController,
       pageController: _pageController,
@@ -137,12 +142,12 @@ class _ReaderPageState extends State<ReaderPage> {
     );
     _sideEffects = ReaderSideEffectController(
       actionController: _actionController,
-      isMounted: () => mounted,
+      isMounted: () => _canUseContext,
       isMenuVisible: () => _isMenuVisible,
       isSeeking: () => _progressController.isSeeking,
       slotCount: () => _slotCount,
       requestRebuild: () {
-        if (mounted) setState(() {});
+        if (_canUseContext) setState(() {});
       },
     );
     _positionController = ReaderPositionController(
@@ -151,7 +156,7 @@ class _ReaderPageState extends State<ReaderPage> {
       observerController: _observerController,
       pageController: _pageController,
       sideEffects: _sideEffects,
-      isMounted: () => mounted,
+      isMounted: () => _canUseContext,
       isSeeking: () => _progressController.isSeeking,
       hasPages: () => _chapterPages.isNotEmpty,
       lastPageIndex: () => _lastPageIndex,
@@ -160,9 +165,9 @@ class _ReaderPageState extends State<ReaderPage> {
       resetViewerTransform: _resetViewerTransformIfNeeded,
     );
     _initialPageRestorer = ReaderInitialPageRestorer(
-      isMounted: () => mounted,
+      isMounted: () => _canUseContext,
       requestRebuild: () {
-        if (mounted) setState(() {});
+        if (_canUseContext) setState(() {});
       },
     );
     _historyManager = ReaderHistoryManager(
@@ -191,7 +196,7 @@ class _ReaderPageState extends State<ReaderPage> {
       historyManager: _historyManager,
       positionController: _positionController,
       sideEffects: _sideEffects,
-      isMounted: () => mounted,
+      isMounted: () => _canUseContext,
       hasChapters: () => widget.chapters.isNotEmpty,
       hasPages: () => _chapterPages.isNotEmpty,
       isMenuVisible: () => _isMenuVisible,
@@ -232,7 +237,21 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   @override
+  void activate() {
+    super.activate();
+    _isElementActive = true;
+  }
+
+  @override
+  void deactivate() {
+    _isElementActive = false;
+    super.deactivate();
+  }
+
+  @override
   void dispose() {
+    _isDisposing = true;
+    _isElementActive = false;
     _progressController.dispose();
     _positionController.dispose();
     _sessionController.clearPrefetch();
@@ -283,6 +302,7 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _setMenuVisible(bool visible) {
+    if (!_canUseContext) return;
     if (_isMenuVisible == visible) {
       _sideEffects.applySystemUiVisibility(visible, _readerSystemOverlayStyle);
       return;
@@ -304,6 +324,7 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _toggleAutoReadPaused() {
+    if (!_canUseContext) return;
     _sideEffects.toggleAutoReadPaused(
       context.read<GlobalSettingCubit>().state.readSetting,
     );
@@ -314,7 +335,7 @@ class _ReaderPageState extends State<ReaderPage> {
     final wasLocked = _currentViewerScale > _scaleLockThreshold;
     final shouldLock = nextScale > _scaleLockThreshold;
     _currentViewerScale = nextScale;
-    if (mounted && wasLocked != shouldLock) {
+    if (_canUseContext && wasLocked != shouldLock) {
       setState(() {});
     }
   }
@@ -334,7 +355,7 @@ class _ReaderPageState extends State<ReaderPage> {
 
     _transformationController.value = Matrix4.identity();
     _currentViewerScale = 1.0;
-    if (mounted) {
+    if (_canUseContext) {
       setState(() {});
     }
     return true;
@@ -343,7 +364,7 @@ class _ReaderPageState extends State<ReaderPage> {
   Future<void> _handleTap() async {
     await Future<void>.delayed(Duration.zero);
     final details = _tapDownDetails;
-    if (details == null || !mounted) return;
+    if (details == null || !_canUseContext) return;
     final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
 
     ReaderGestureLogic.handleTap(
@@ -364,7 +385,7 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _handleDoubleTap() {
-    if (!mounted) return;
+    if (!_canUseContext) return;
     final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
     _tapDownDetails = null;
 
@@ -379,6 +400,7 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _handleDoubleTapZoom() {
+    if (!_canUseContext) return;
     final details = _doubleTapDownDetails;
     if (details == null) return;
 
@@ -422,7 +444,12 @@ class _ReaderPageState extends State<ReaderPage> {
     return false;
   }
 
-  int get _slotCount => _layoutMetrics.slotCount;
+  int get _slotCount {
+    if (!_canUseContext) return _lastKnownSlotCount;
+    final count = _layoutMetrics.slotCount;
+    _lastKnownSlotCount = count;
+    return count;
+  }
 
   int get _lastPageIndex => _layoutMetrics.lastPageIndex;
 
@@ -468,7 +495,9 @@ class _ReaderPageState extends State<ReaderPage> {
       final pendingReadSetting = _pendingChapterReadSetting;
       _pendingChapterData = null;
       _pendingChapterReadSetting = null;
-      if (!mounted || pendingData == null || pendingReadSetting == null) {
+      if (!_canUseContext ||
+          pendingData == null ||
+          pendingReadSetting == null) {
         return;
       }
       _applyChapterData(pendingData, pendingReadSetting);
@@ -476,6 +505,7 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _applyChapterData(ReaderChapterData data, ReadSettingState readSetting) {
+    if (!_canUseContext) return;
     final chapterSnapshot = data.snapshot;
     if (!_isCurrentChapterSnapshot(chapterSnapshot)) return;
 
@@ -486,7 +516,7 @@ class _ReaderPageState extends State<ReaderPage> {
     _historyManager.markLoaded();
     _sessionController.prefetchAdjacentChapters(_chapterIndex);
     final pageIndexChanged = _syncReaderMetrics(readSetting);
-    if (snapshotChanged && !pageIndexChanged && mounted) {
+    if (snapshotChanged && !pageIndexChanged && _canUseContext) {
       setState(() {});
     }
     if (snapshotChanged) {
@@ -505,18 +535,19 @@ class _ReaderPageState extends State<ReaderPage> {
       _isReaderMetricsSyncScheduled = false;
       final pendingReadSetting = _pendingMetricsReadSetting;
       _pendingMetricsReadSetting = null;
-      if (!mounted || pendingReadSetting == null) return;
+      if (!_canUseContext || pendingReadSetting == null) return;
       _syncReaderMetrics(pendingReadSetting);
     });
   }
 
   bool _syncReaderMetrics(ReadSettingState readSetting) {
     final slotCount = _layoutMetrics.slotCountFor(readSetting);
+    _lastKnownSlotCount = slotCount;
     final maxSlot = slotCount > 0 ? slotCount - 1 : 0;
     final safePageIndex = _pageIndex.clamp(0, maxSlot).toInt();
     final pageIndexChanged = safePageIndex != _pageIndex;
     if (pageIndexChanged) {
-      if (mounted) {
+      if (_canUseContext) {
         setState(() {
           _pageIndex = safePageIndex;
         });
@@ -530,6 +561,7 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _handleReadSettingChanged(ReadSettingState readSetting) {
+    if (!_canUseContext) return;
     if (!readSetting.doubleTapZoom &&
         _currentViewerScale > _scaleLockThreshold) {
       _resetViewerTransformIfNeeded();
@@ -539,10 +571,10 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _handleImageSizeResolved(int index, Size size) {
+    if (!_canUseContext) return;
     _imageSizeCubit?.updateSize(index, size);
-    if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _progressController.isSeeking) return;
+      if (!_canUseContext || _progressController.isSeeking) return;
       final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
       if (!isColumnReadMode(readSetting.readMode)) return;
       final slotIndex = _layoutMetrics.effectiveDoublePageEnabled(readSetting)
@@ -560,7 +592,9 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _restoreInitialPage() {
-    if (!mounted || !_initialPageRestorer.shouldRestoreInitialPage) return;
+    if (!_canUseContext || !_initialPageRestorer.shouldRestoreInitialPage) {
+      return;
+    }
     final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
     final initialPageIndex = _initialPageRestorer.initialPageIndex;
     if (!isColumnReadMode(readSetting.readMode)) {
@@ -608,7 +642,7 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   Future<void> _showChapterPicker() async {
-    if (widget.chapters.isEmpty) return;
+    if (widget.chapters.isEmpty || !_canUseContext) return;
 
     final selectedIndex = await showModalBottomSheet<int>(
       context: context,
@@ -651,11 +685,12 @@ class _ReaderPageState extends State<ReaderPage> {
       },
     );
 
-    if (!mounted || selectedIndex == null) return;
+    if (!_canUseContext || selectedIndex == null) return;
     _chapterNavigation.goToChapter(selectedIndex);
   }
 
   void _handleReaderLayoutChanged(ReadSettingState previousReadSetting) {
+    if (!_canUseContext) return;
     final nextReadSetting = context.read<GlobalSettingCubit>().state.readSetting;
     final targetPageIndex = _layoutMetrics.pageIndexAfterLayoutChange(
       previousReadSetting: previousReadSetting,
@@ -670,11 +705,13 @@ class _ReaderPageState extends State<ReaderPage> {
       _pageIndex = targetPageIndex;
       _initialPageRestorer.reset();
     });
-    _readerCubit.updateTotalSlots(_layoutMetrics.slotCountFor(nextReadSetting));
+    final nextSlotCount = _layoutMetrics.slotCountFor(nextReadSetting);
+    _lastKnownSlotCount = nextSlotCount;
+    _readerCubit.updateTotalSlots(nextSlotCount);
     _readerCubit.updatePageIndex(targetPageIndex);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      if (!_canUseContext) return;
       _positionController.jumpToPage(
         targetPageIndex,
         correctAfterLayout: isColumnReadMode(nextReadSetting.readMode),
@@ -684,6 +721,7 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   Future<void> _showReaderSettings() {
+    if (!_canUseContext) return Future<void>.value();
     return showReaderSettingsSheet(
       context,
       onLayoutChanged: _handleReaderLayoutChanged,

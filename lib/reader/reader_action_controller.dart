@@ -7,6 +7,7 @@ import 'reader_cubit.dart';
 
 class ReaderActionController {
   final BuildContext context;
+  final bool Function() isActive;
   final ScrollController scrollController;
   final ListObserverController observerController;
   final PageController pageController;
@@ -15,6 +16,7 @@ class ReaderActionController {
 
   ReaderActionController({
     required this.context,
+    required this.isActive,
     required this.scrollController,
     required this.observerController,
     required this.pageController,
@@ -42,6 +44,7 @@ class ReaderActionController {
   BuildContext get _activeContext => context;
 
   void onKeyScrollNext() {
+    if (!isActive()) return;
     final mode = _readMode;
     if (mode == 0) {
       _scrollVertical(offset: 200.0, durationMs: 100);
@@ -51,6 +54,7 @@ class ReaderActionController {
   }
 
   void onKeyScrollPrev() {
+    if (!isActive()) return;
     final mode = _readMode;
     if (mode == 0) {
       _scrollVertical(offset: -200.0, durationMs: 100);
@@ -60,6 +64,7 @@ class ReaderActionController {
   }
 
   void onPageActionNext() {
+    if (!isActive()) return;
     final mode = _readMode;
     if (mode == 0) {
       _scrollVertical(page: true, next: true);
@@ -69,6 +74,7 @@ class ReaderActionController {
   }
 
   void onPageActionPrev() {
+    if (!isActive()) return;
     final mode = _readMode;
     if (mode == 0) {
       _scrollVertical(page: true, next: false);
@@ -78,6 +84,7 @@ class ReaderActionController {
   }
 
   void onVolumeActionNext() {
+    if (!isActive()) return;
     if (!_readSetting.volumeKeyPageTurn) return;
     final mode = _readMode;
     if (mode == 0) {
@@ -91,6 +98,7 @@ class ReaderActionController {
   }
 
   void onVolumeActionPrev() {
+    if (!isActive()) return;
     if (!_readSetting.volumeKeyPageTurn) return;
     final mode = _readMode;
     if (mode == 0) {
@@ -104,6 +112,7 @@ class ReaderActionController {
   }
 
   void onAutoReadTick() {
+    if (!isActive()) return;
     final mode = _readMode;
     if (mode == 0) {
       _scrollVerticalAuto();
@@ -132,16 +141,18 @@ class ReaderActionController {
       final targetPage = currentPage.clamp(0, totalSlots - 1).toInt();
 
       if (_noAnimation) {
+        final topPadding = MediaQuery.of(_activeContext).padding.top;
         observerController.jumpTo(
           index: targetPage,
-          offset: (_) => MediaQuery.of(_activeContext).padding.top + 5.0,
+          offset: (_) => topPadding + 5.0,
         );
       } else {
+        final topPadding = MediaQuery.of(_activeContext).padding.top;
         observerController.animateTo(
           index: targetPage,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeInOut,
-          offset: (_) => MediaQuery.of(_activeContext).padding.top + 5.0,
+          offset: (_) => topPadding + 5.0,
         );
       }
     } else {
