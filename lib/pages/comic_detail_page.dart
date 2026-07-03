@@ -164,6 +164,10 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
           ),
         ],
       ),
+      floatingActionButton: _StartReadingFab(
+        detailFuture: _detailFuture,
+        onStartReading: (data) => _openReader(data.comic, data.chapters, 0),
+      ),
       body: NotificationListener<ScrollNotification>(
         onNotification: _handleScrollNotification,
         child: FutureBuilder<_ComicDetailData>(
@@ -209,6 +213,36 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
 }
 
 enum _DetailMenuAction { refresh, addFavorite }
+
+class _StartReadingFab extends StatelessWidget {
+  final Future<_ComicDetailData> detailFuture;
+  final ValueChanged<_ComicDetailData> onStartReading;
+
+  const _StartReadingFab({
+    required this.detailFuture,
+    required this.onStartReading,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<_ComicDetailData>(
+      future: detailFuture,
+      builder: (context, snapshot) {
+        final data = snapshot.data;
+        if (data == null || data.chapters.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        return FloatingActionButton.extended(
+          tooltip: '进入第一话',
+          onPressed: () => onStartReading(data),
+          icon: const Icon(Icons.play_arrow),
+          label: const Text('第一话'),
+        );
+      },
+    );
+  }
+}
 
 class _DetailBody extends StatelessWidget {
   final Comic comic;
@@ -298,7 +332,7 @@ class _DetailBody extends StatelessWidget {
                 onTap: () => onChapterSelected(chapter, index),
               );
             }),
-          const SizedBox(height: 24),
+          const SizedBox(height: 96),
         ],
       ),
     );

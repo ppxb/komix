@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/comic.dart';
 import '../providers/provider_registry.dart';
@@ -26,6 +27,7 @@ class _ReaderPageState extends State<ReaderPage> {
   late int _chapterIndex;
   late Future<_ReaderChapterData> _chapterFuture;
   final ScrollController _scrollController = ScrollController();
+  bool _isMenuVisible = false;
 
   @override
   void initState() {
@@ -35,12 +37,58 @@ class _ReaderPageState extends State<ReaderPage> {
         ? 0
         : widget.initialChapterIndex.clamp(0, lastIndex).toInt();
     _chapterFuture = _loadChapter(_chapterIndex);
+    _applySystemUiVisibility(false);
   }
 
   @override
   void dispose() {
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: [SystemUiOverlay.top, SystemUiOverlay.bottom],
+    );
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _setMenuVisible(bool visible) {
+    if (_isMenuVisible == visible) {
+      _applySystemUiVisibility(visible);
+      return;
+    }
+
+    setState(() {
+      _isMenuVisible = visible;
+    });
+
+    _applySystemUiVisibility(visible);
+  }
+
+  void _applySystemUiVisibility(bool visible) {
+    if (visible) {
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: [SystemUiOverlay.top, SystemUiOverlay.bottom],
+      );
+    } else {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    }
+  }
+
+  void _toggleMenu() {
+    _setMenuVisible(!_isMenuVisible);
+  }
+
+  bool _handleReaderScrollNotification(ScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical || !_isMenuVisible) {
+      return false;
+    }
+
+    if (notification is ScrollStartNotification &&
+        notification.dragDetails != null) {
+      _setMenuVisible(false);
+    }
+
+    return false;
   }
 
   String _chapterTitle(int index) {
@@ -144,57 +192,148 @@ class _ReaderPageState extends State<ReaderPage> {
     final hasNext = _chapterIndex < widget.chapters.length - 1;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          widget.comic.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: [
-          IconButton(
-            tooltip: '刷新',
-            onPressed: _reloadChapter,
-            icon: const Icon(Icons.refresh),
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _toggleMenu,
+              child: NotificationListener<ScrollNotification>(
+                onNotification: _handleReaderScrollNotification,
+                child: FutureBuilder<_ReaderChapterData>(
+                  key: ValueKey(_chapterIndex),
+                  future: _chapterFuture,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting &&
+                        !snapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    if (snapshot.hasError && !snapshot.hasData) {
+                      return _ReaderErrorView(
+                        message: snapshot.error.toString(),
+                        onRetry: _reloadChapter,
+                      );
+                    }
+
+                    final data = snapshot.requireData;
+                    if (data.images.isEmpty) {
+                      return _ReaderEmptyView(onRetry: _reloadChapter);
+                    }
+
+                    return _ReaderImageList(
+                      images: data.images,
+                      controller: _scrollController,
+                      onRetry: _reloadChapter,
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+          _ReaderTopBar(
+            title: widget.comic.title,
+            isVisible: _isMenuVisible,
+            onRefresh: _reloadChapter,
+          ),
+          _ReaderBottomOverlay(
+            isVisible: _isMenuVisible,
+            child: _ReaderBottomBar(
+              chapterTitle: _chapterTitle(_chapterIndex),
+              chapterIndex: _chapterIndex,
+              chapterCount: widget.chapters.length,
+              hasPrevious: hasPrevious,
+              hasNext: hasNext,
+              onPrevious: () => _goToChapter(_chapterIndex - 1),
+              onChapterPicker: _showChapterPicker,
+              onNext: () => _goToChapter(_chapterIndex + 1),
+            ),
           ),
         ],
       ),
-      body: FutureBuilder<_ReaderChapterData>(
-        key: ValueKey(_chapterIndex),
-        future: _chapterFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting &&
-              !snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
+    );
+  }
+}
 
-          if (snapshot.hasError && !snapshot.hasData) {
-            return _ReaderErrorView(
-              message: snapshot.error.toString(),
-              onRetry: _reloadChapter,
-            );
-          }
+class _ReaderTopBar extends StatelessWidget {
+  final String title;
+  final bool isVisible;
+  final VoidCallback onRefresh;
 
-          final data = snapshot.requireData;
-          if (data.images.isEmpty) {
-            return _ReaderEmptyView(onRetry: _reloadChapter);
-          }
+  const _ReaderTopBar({
+    required this.title,
+    required this.isVisible,
+    required this.onRefresh,
+  });
 
-          return _ReaderImageList(
-            images: data.images,
-            controller: _scrollController,
-            onRetry: _reloadChapter,
-          );
-        },
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        ignoring: !isVisible,
+        child: AnimatedSlide(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          offset: isVisible ? Offset.zero : const Offset(0, -1),
+          child: Material(
+            color: colorScheme.surface,
+            elevation: isVisible ? 2 : 0,
+            child: SafeArea(
+              bottom: false,
+              child: SizedBox(
+                height: kToolbarHeight,
+                child: Row(
+                  children: [
+                    const BackButton(),
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '刷新',
+                      onPressed: onRefresh,
+                      icon: const Icon(Icons.refresh),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
-      bottomNavigationBar: _ReaderBottomBar(
-        chapterTitle: _chapterTitle(_chapterIndex),
-        chapterIndex: _chapterIndex,
-        chapterCount: widget.chapters.length,
-        hasPrevious: hasPrevious,
-        hasNext: hasNext,
-        onPrevious: () => _goToChapter(_chapterIndex - 1),
-        onChapterPicker: _showChapterPicker,
-        onNext: () => _goToChapter(_chapterIndex + 1),
+    );
+  }
+}
+
+class _ReaderBottomOverlay extends StatelessWidget {
+  final bool isVisible;
+  final Widget child;
+
+  const _ReaderBottomOverlay({required this.isVisible, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: IgnorePointer(
+        ignoring: !isVisible,
+        child: AnimatedSlide(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          offset: isVisible ? Offset.zero : const Offset(0, 1),
+          child: SafeArea(top: false, child: child),
+        ),
       ),
     );
   }
@@ -245,39 +384,23 @@ class _ReaderImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
     return Semantics(
       label: '第 $pageNumber 页，共 $pageCount 页',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Text(
-              '$pageNumber / $pageCount',
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
+      child: CachedNetworkImage(
+        imageUrl: url,
+        width: double.infinity,
+        fit: BoxFit.fitWidth,
+        progressIndicatorBuilder: (context, url, progress) {
+          return SizedBox(
+            height: 240,
+            child: Center(
+              child: CircularProgressIndicator(value: progress.progress),
             ),
-          ),
-          CachedNetworkImage(
-            imageUrl: url,
-            width: double.infinity,
-            fit: BoxFit.fitWidth,
-            progressIndicatorBuilder: (context, url, progress) {
-              return SizedBox(
-                height: 240,
-                child: Center(
-                  child: CircularProgressIndicator(value: progress.progress),
-                ),
-              );
-            },
-            errorWidget: (context, url, error) {
-              return _ImageErrorView(onRetry: onRetry);
-            },
-          ),
-        ],
+          );
+        },
+        errorWidget: (context, url, error) {
+          return _ImageErrorView(onRetry: onRetry);
+        },
       ),
     );
   }
