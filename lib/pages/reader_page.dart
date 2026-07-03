@@ -63,12 +63,14 @@ class ReaderPage extends StatefulWidget {
 
 class _ReaderPageState extends State<ReaderPage> {
   static const _estimatedPageAspectRatio = 1.42;
+  static const _scaleLockThreshold = 1.01;
 
   late int _chapterIndex;
   late Future<_ReaderChapterData> _chapterFuture;
   late final ReaderCubit _readerCubit;
   late final ListObserverController _observerController;
   late final PageController _pageController;
+  late final TransformationController _transformationController;
   late final FocusNode _readerFocusNode;
   late final ReaderActionController _actionController;
   late final ReaderHistoryManager _historyManager;
@@ -87,6 +89,7 @@ class _ReaderPageState extends State<ReaderPage> {
   bool _isSeeking = false;
   bool _isMenuVisible = false;
   bool _showEinkMask = false;
+  double _currentViewerScale = 1.0;
   int _pageIndex = 0;
   int _initialPageIndex = 0;
   bool _shouldRestoreInitialPage = false;
@@ -94,6 +97,7 @@ class _ReaderPageState extends State<ReaderPage> {
   bool _isRestoreScheduled = false;
   int _restoreAttempts = 0;
   TapDownDetails? _tapDownDetails;
+  TapDownDetails? _doubleTapDownDetails;
 
   @override
   void initState() {
@@ -105,12 +109,14 @@ class _ReaderPageState extends State<ReaderPage> {
     _readerCubit = ReaderCubit();
     _observerController = ListObserverController(controller: _scrollController);
     _pageController = PageController(initialPage: 0);
+    _transformationController = TransformationController();
     _readerFocusNode = FocusNode();
     _actionController = ReaderActionController(
       context: context,
       scrollController: _scrollController,
       observerController: _observerController,
       pageController: _pageController,
+      onBeforeTurnPage: _restoreScaleBeforeTurnPage,
     );
     _historyManager = ReaderHistoryManager(
       providerId: widget.providerId,
@@ -153,6 +159,7 @@ class _ReaderPageState extends State<ReaderPage> {
     _scrollController.removeListener(_handleScrollChanged);
     _scrollController.dispose();
     _pageController.dispose();
+    _transformationController.dispose();
     _readerFocusNode.dispose();
     _historyManager.stop();
     unawaited(_imageSizeCubit?.close());
@@ -254,6 +261,37 @@ class _ReaderPageState extends State<ReaderPage> {
     });
   }
 
+  void _updateViewerScale() {
+    final nextScale = _transformationController.value.getMaxScaleOnAxis();
+    final wasLocked = _currentViewerScale > _scaleLockThreshold;
+    final shouldLock = nextScale > _scaleLockThreshold;
+    _currentViewerScale = nextScale;
+    if (mounted && wasLocked != shouldLock) {
+      setState(() {});
+    }
+  }
+
+  bool _restoreScaleBeforeTurnPage(bool _) {
+    _resetViewerTransformIfNeeded();
+    return false;
+  }
+
+  bool _resetViewerTransformIfNeeded() {
+    final matrix = _transformationController.value;
+    final scale = matrix.getMaxScaleOnAxis();
+    final tx = matrix.storage[12].abs();
+    final ty = matrix.storage[13].abs();
+    final shouldReset = scale > _scaleLockThreshold || tx > 0.5 || ty > 0.5;
+    if (!shouldReset) return false;
+
+    _transformationController.value = Matrix4.identity();
+    _currentViewerScale = 1.0;
+    if (mounted) {
+      setState(() {});
+    }
+    return true;
+  }
+
   Future<void> _handleTap() async {
     await Future<void>.delayed(Duration.zero);
     final details = _tapDownDetails;
@@ -272,6 +310,7 @@ class _ReaderPageState extends State<ReaderPage> {
               }
             }
           : _toggleMenu,
+      onBeforePageTurn: _resetViewerTransformIfNeeded,
     );
     _tapDownDetails = null;
   }
@@ -281,9 +320,43 @@ class _ReaderPageState extends State<ReaderPage> {
     final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
     _tapDownDetails = null;
 
+    if (readSetting.doubleTapZoom) {
+      _handleDoubleTapZoom();
+      return;
+    }
+
     if (readSetting.doubleTapOpenMenu) {
       _toggleMenu();
     }
+  }
+
+  void _handleDoubleTapZoom() {
+    final details = _doubleTapDownDetails;
+    if (details == null) return;
+
+    if (_resetViewerTransformIfNeeded()) {
+      _doubleTapDownDetails = null;
+      return;
+    }
+
+    final renderObject = context.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) {
+      _doubleTapDownDetails = null;
+      return;
+    }
+
+    final localPosition = renderObject.globalToLocal(details.globalPosition);
+    const targetScale = 2.5;
+    final matrix = Matrix4.identity()
+      ..translate(
+        renderObject.size.width / 2 - localPosition.dx * targetScale,
+        renderObject.size.height / 2 - localPosition.dy * targetScale,
+      )
+      ..scale(targetScale);
+
+    _transformationController.value = matrix;
+    _doubleTapDownDetails = null;
+    _updateViewerScale();
   }
 
   void _handleScrollChanged() {
@@ -493,6 +566,7 @@ class _ReaderPageState extends State<ReaderPage> {
 
     final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
     final targetPage = pageIndex.clamp(0, _lastPageIndex).toInt();
+    _resetViewerTransformIfNeeded();
     if (!isColumnReadMode(readSetting.readMode)) {
       if (!_pageController.hasClients) return;
       _pageController.jumpToPage(targetPage);
@@ -717,6 +791,8 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   Future<void> _reloadChapter() {
+    _hideEinkMask();
+    _resetViewerTransformIfNeeded();
     final future = _loadChapter(_chapterIndex);
     setState(() {
       _chapterFuture = future;
@@ -734,6 +810,7 @@ class _ReaderPageState extends State<ReaderPage> {
     _progressSaveTimer?.cancel();
     _stopAutoRead();
     _hideEinkMask();
+    _resetViewerTransformIfNeeded();
     unawaited(_saveProgressNow());
     _pageCorrectionTimer?.cancel();
     _historyManager.markLoading();
@@ -824,6 +901,7 @@ class _ReaderPageState extends State<ReaderPage> {
     }
     _readerCubit.updatePageIndex(safePageIndex);
     _scheduleProgressSave();
+    _resetViewerTransformIfNeeded();
     _triggerEinkDelay(context.read<GlobalSettingCubit>().state.readSetting);
 
     if (_isMenuVisible) {
@@ -835,6 +913,7 @@ class _ReaderPageState extends State<ReaderPage> {
     _progressSaveTimer?.cancel();
     _pageCorrectionTimer?.cancel();
     _hideEinkMask();
+    _resetViewerTransformIfNeeded();
     setState(() {
       _pageIndex = 0;
       _initialPageIndex = 0;
@@ -880,6 +959,16 @@ class _ReaderPageState extends State<ReaderPage> {
       readSetting,
       buildContext: context,
     );
+    final isDoubleTapActionEnabled =
+        readSetting.doubleTapOpenMenu || readSetting.doubleTapZoom;
+    if (!readSetting.doubleTapZoom &&
+        _currentViewerScale > _scaleLockThreshold) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _resetViewerTransformIfNeeded();
+        }
+      });
+    }
 
     return BlocProvider.value(
       value: _readerCubit,
@@ -906,12 +995,25 @@ class _ReaderPageState extends State<ReaderPage> {
                     behavior: HitTestBehavior.translucent,
                     onTapDown: (details) => _tapDownDetails = details,
                     onTap: _handleTap,
-                    onDoubleTap: readSetting.doubleTapOpenMenu
+                    onDoubleTapDown: isDoubleTapActionEnabled
+                        ? (details) => _doubleTapDownDetails = details
+                        : null,
+                    onDoubleTap: isDoubleTapActionEnabled
                         ? _handleDoubleTap
                         : null,
-                    child: NotificationListener<ScrollNotification>(
-                      onNotification: _handleReaderScrollNotification,
-                      child: FutureBuilder<_ReaderChapterData>(
+                    child: InteractiveViewer(
+                      transformationController: _transformationController,
+                      boundaryMargin: EdgeInsets.zero,
+                      minScale: 1,
+                      maxScale: 4,
+                      panEnabled: _currentViewerScale > _scaleLockThreshold,
+                      scaleEnabled: readSetting.doubleTapZoom,
+                      interactionEndFrictionCoefficient: 0.00001,
+                      onInteractionUpdate: (_) => _updateViewerScale(),
+                      onInteractionEnd: (_) => _updateViewerScale(),
+                      child: NotificationListener<ScrollNotification>(
+                        onNotification: _handleReaderScrollNotification,
+                        child: FutureBuilder<_ReaderChapterData>(
                         key: ValueKey(_chapterIndex),
                         future: _chapterFuture,
                         builder: (context, snapshot) {

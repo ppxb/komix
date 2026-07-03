@@ -254,6 +254,20 @@ class _GestureSection extends StatelessWidget {
         children: [
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
+            title: const Text('双击缩放'),
+            subtitle: const Text('双击图片可在放大和还原之间切换'),
+            value: setting.doubleTapZoom,
+            onChanged: (value) {
+              cubit.updateReadSetting(
+                (current) => current.copyWith(
+                  doubleTapZoom: value,
+                  doubleTapOpenMenu: value ? false : current.doubleTapOpenMenu,
+                ),
+              );
+            },
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
             title: const Text('双击打开操作栏'),
             subtitle: const Text('开启后，单击中间区域只关闭已显示的操作栏'),
             value: setting.doubleTapOpenMenu,
