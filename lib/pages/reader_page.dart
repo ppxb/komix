@@ -5,9 +5,13 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:scrollview_observer/scrollview_observer.dart';
 
 import '../models/comic.dart';
+import '../models/reader_snapshot.dart';
 import '../providers/provider_registry.dart';
+import '../reader/reader_cubit.dart';
 import '../services/reading_progress_service.dart';
 
 const _readerSystemOverlayStyle = SystemUiOverlayStyle(
@@ -42,11 +46,14 @@ class _ReaderPageState extends State<ReaderPage> {
   static const _estimatedPageAspectRatio = 1.42;
 
   late int _chapterIndex;
-  late Future<_ReaderChapterData> _chapterFuture;
+  late Future<ReaderChapterSnapshot> _chapterFuture;
+  late final ReaderCubit _readerCubit;
+  late final ListObserverController _observerController;
   final ScrollController _scrollController = ScrollController();
   final Map<String, Size> _imageSizes = {};
   List<GlobalKey> _pageKeys = const [];
-  List<String> _chapterImages = const [];
+  ReaderChapterSnapshot? _chapterSnapshot;
+  List<ReaderPageImage> _chapterPages = const [];
   Timer? _progressSaveTimer;
   Timer? _pageCorrectionTimer;
   bool _isSeeking = false;
@@ -66,10 +73,13 @@ class _ReaderPageState extends State<ReaderPage> {
         ? 0
         : widget.initialChapterIndex.clamp(0, lastIndex).toInt();
     _chapterFuture = _loadChapter(_chapterIndex);
+    _readerCubit = ReaderCubit();
+    _observerController = ListObserverController(controller: _scrollController);
     _initialPageIndex = widget.initialPageIndex < 0
         ? 0
         : widget.initialPageIndex;
     _pageIndex = _initialPageIndex;
+    _readerCubit.updatePageIndex(_pageIndex);
     _shouldRestoreInitialPage = _initialPageIndex > 0;
     _isRestoringInitialPage = _shouldRestoreInitialPage;
     _scrollController.addListener(_handleScrollChanged);
@@ -87,6 +97,7 @@ class _ReaderPageState extends State<ReaderPage> {
     );
     _scrollController.removeListener(_handleScrollChanged);
     _scrollController.dispose();
+    unawaited(_readerCubit.close());
     super.dispose();
   }
 
@@ -99,6 +110,7 @@ class _ReaderPageState extends State<ReaderPage> {
     setState(() {
       _isMenuVisible = visible;
     });
+    _readerCubit.updateMenuVisible(visible: visible);
 
     _applySystemUiVisibility(visible);
   }
@@ -121,14 +133,19 @@ class _ReaderPageState extends State<ReaderPage> {
 
   void _handleScrollChanged() {
     if (_isSeeking) return;
+    _scheduleProgressSave();
+  }
 
-    final pageIndex = _currentPageIndex();
-    if (pageIndex != _pageIndex && mounted) {
+  void _handleObservedPageIndex(int pageIndex) {
+    if (_isSeeking || _chapterPages.isEmpty) return;
+
+    final safePageIndex = pageIndex.clamp(0, _lastPageIndex).toInt();
+    if (safePageIndex != _pageIndex && mounted) {
       setState(() {
-        _pageIndex = pageIndex;
+        _pageIndex = safePageIndex;
       });
     }
-
+    _readerCubit.updatePageIndex(safePageIndex);
     _scheduleProgressSave();
   }
 
@@ -145,28 +162,9 @@ class _ReaderPageState extends State<ReaderPage> {
     return false;
   }
 
-  int _currentPageIndex() {
-    if (!_scrollController.hasClients || _chapterImages.isEmpty) {
-      return _pageIndex.clamp(0, _lastPageIndex).toInt();
-    }
-
-    final position = _scrollController.position;
-    final viewportTop = position.pixels + 1;
-    final pageWidth = _readerPageWidth();
-    var offset = 0.0;
-
-    for (var i = 0; i < _chapterImages.length; i++) {
-      final height = _estimatedPageHeight(i, pageWidth);
-      if (viewportTop < offset + height) return i;
-      offset += height;
-    }
-
-    return _lastPageIndex;
-  }
-
   int get _lastPageIndex {
-    if (_chapterImages.isEmpty) return 0;
-    return _chapterImages.length - 1;
+    if (_chapterPages.isEmpty) return 0;
+    return _chapterPages.length - 1;
   }
 
   double _readerPageWidth() {
@@ -180,8 +178,8 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   double _estimatedPageHeight(int index, double width) {
-    if (width <= 0 || index < 0 || index >= _chapterImages.length) return 0;
-    final size = _imageSizes[_chapterImages[index]];
+    if (width <= 0 || index < 0 || index >= _chapterPages.length) return 0;
+    final size = _imageSizes[_chapterPages[index].cacheKey];
     if (size != null && size.width > 0 && size.height > 0) {
       return width * size.height / size.width;
     }
@@ -198,11 +196,22 @@ class _ReaderPageState extends State<ReaderPage> {
     return offset;
   }
 
-  bool _syncChapterImages(List<String> images) {
-    if (listEquals(_chapterImages, images)) return false;
-    _chapterImages = images;
+  bool _syncChapterSnapshot(ReaderChapterSnapshot snapshot) {
+    final oldKeys = _chapterPages
+        .map((page) => page.cacheKey)
+        .toList(growable: false);
+    final newKeys = snapshot.pages
+        .map((page) => page.cacheKey)
+        .toList(growable: false);
+    if (_chapterSnapshot?.chapter.id == snapshot.chapter.id &&
+        listEquals(oldKeys, newKeys)) {
+      return false;
+    }
+
+    _chapterSnapshot = snapshot;
+    _chapterPages = snapshot.pages;
     _pageKeys = List<GlobalKey>.generate(
-      images.length,
+      snapshot.pages.length,
       (_) => GlobalKey(),
       growable: false,
     );
@@ -228,7 +237,7 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _jumpToPage(int pageIndex, {bool correctAfterLayout = false}) {
-    if (!_scrollController.hasClients || _chapterImages.isEmpty) return;
+    if (!_scrollController.hasClients || _chapterPages.isEmpty) return;
 
     final position = _scrollController.position;
     final target = _estimatedPageOffset(pageIndex).clamp(
@@ -281,11 +290,11 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   Future<void> _saveProgressNow() {
-    if (widget.chapters.isEmpty || _chapterImages.isEmpty) {
+    if (widget.chapters.isEmpty || _chapterPages.isEmpty) {
       return Future<void>.value();
     }
 
-    final chapter = widget.chapters[_chapterIndex];
+    final chapter = _chapterSnapshot?.chapter ?? widget.chapters[_chapterIndex];
     return ReadingProgressService.instance.saveProgress(
       ReadingProgress(
         providerId: widget.providerId,
@@ -297,7 +306,7 @@ class _ReaderPageState extends State<ReaderPage> {
         chapterIndex: _chapterIndex,
         chapterCount: widget.chapters.length,
         pageIndex: _pageIndex.clamp(0, _lastPageIndex).toInt(),
-        pageCount: _chapterImages.length,
+        pageCount: _chapterPages.length,
         updatedAt: DateTime.now().toUtc(),
       ),
     );
@@ -327,6 +336,7 @@ class _ReaderPageState extends State<ReaderPage> {
 
     _shouldRestoreInitialPage = false;
     _jumpToPage(_initialPageIndex, correctAfterLayout: true);
+    _readerCubit.updatePageIndex(_initialPageIndex);
     Future<void>.delayed(const Duration(milliseconds: 120), () {
       if (!mounted) return;
       setState(() {
@@ -357,6 +367,8 @@ class _ReaderPageState extends State<ReaderPage> {
   void _handleProgressChangeStart(double value) {
     _progressSaveTimer?.cancel();
     _isSeeking = true;
+    _readerCubit.updateSliderRolling(true);
+    _readerCubit.updateIsComicRolling(true);
     HapticFeedback.selectionClick();
   }
 
@@ -366,15 +378,19 @@ class _ReaderPageState extends State<ReaderPage> {
     setState(() {
       _pageIndex = pageIndex;
     });
+    _readerCubit.updateSliderChanged(pageIndex.toDouble());
     HapticFeedback.selectionClick();
   }
 
   void _handleProgressChangeEnd(double value) {
     final pageIndex = value.round().clamp(0, _lastPageIndex).toInt();
     _isSeeking = false;
+    _readerCubit.updateSliderRolling(false);
+    _readerCubit.updateIsComicRolling(false);
     setState(() {
       _pageIndex = pageIndex;
     });
+    _readerCubit.updatePageIndex(pageIndex);
     _jumpToPage(pageIndex, correctAfterLayout: true);
     unawaited(_saveProgressNow());
   }
@@ -385,7 +401,7 @@ class _ReaderPageState extends State<ReaderPage> {
     return widget.chapters.length == 1 ? '单章节' : chapter.name;
   }
 
-  Future<_ReaderChapterData> _loadChapter(int index) async {
+  Future<ReaderChapterSnapshot> _loadChapter(int index) async {
     if (widget.chapters.isEmpty) {
       throw StateError('暂无章节');
     }
@@ -396,11 +412,11 @@ class _ReaderPageState extends State<ReaderPage> {
     }
 
     final chapter = widget.chapters[index];
-    final images = (await provider.getChapterImages(chapter.id))
-        .map((url) => url.trim())
-        .where((url) => url.isNotEmpty)
-        .toList(growable: false);
-    return _ReaderChapterData(images: images);
+    return provider.getReaderChapterSnapshot(
+      comic: widget.comic,
+      chapter: chapter,
+      chapters: widget.chapters,
+    );
   }
 
   Future<void> _reloadChapter() {
@@ -424,12 +440,15 @@ class _ReaderPageState extends State<ReaderPage> {
       _chapterFuture = _loadChapter(index);
       _pageIndex = 0;
       _initialPageIndex = 0;
-      _chapterImages = const [];
+      _chapterSnapshot = null;
+      _chapterPages = const [];
       _pageKeys = const [];
       _shouldRestoreInitialPage = false;
       _isRestoringInitialPage = false;
       _restoreAttempts = 0;
     });
+    _readerCubit.updateTotalSlots(0);
+    _readerCubit.updatePageIndex(0);
 
     if (_scrollController.hasClients) {
       _scrollController.jumpTo(0);
@@ -489,95 +508,105 @@ class _ReaderPageState extends State<ReaderPage> {
     final hasPrevious = _chapterIndex > 0;
     final hasNext = _chapterIndex < widget.chapters.length - 1;
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: _readerSystemOverlayStyle,
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        body: Stack(
-          children: [
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: _toggleMenu,
-                child: NotificationListener<ScrollNotification>(
-                  onNotification: _handleReaderScrollNotification,
-                  child: FutureBuilder<_ReaderChapterData>(
-                    key: ValueKey(_chapterIndex),
-                    future: _chapterFuture,
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting &&
-                          !snapshot.hasData) {
-                        return const Center(
-                          child: CircularProgressIndicator(color: Colors.white),
-                        );
-                      }
+    return BlocProvider.value(
+      value: _readerCubit,
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: _readerSystemOverlayStyle,
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          body: Stack(
+            children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: _toggleMenu,
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: _handleReaderScrollNotification,
+                    child: FutureBuilder<ReaderChapterSnapshot>(
+                      key: ValueKey(_chapterIndex),
+                      future: _chapterFuture,
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                                ConnectionState.waiting &&
+                            !snapshot.hasData) {
+                          return const Center(
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                            ),
+                          );
+                        }
 
-                      if (snapshot.hasError && !snapshot.hasData) {
-                        return _ReaderErrorView(
-                          message: snapshot.error.toString(),
+                        if (snapshot.hasError && !snapshot.hasData) {
+                          return _ReaderErrorView(
+                            message: snapshot.error.toString(),
+                            onRetry: _reloadChapter,
+                          );
+                        }
+
+                        final data = snapshot.requireData;
+                        if (data.pages.isEmpty) {
+                          return _ReaderEmptyView(onRetry: _reloadChapter);
+                        }
+
+                        final snapshotChanged = _syncChapterSnapshot(data);
+                        if (snapshotChanged) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (!mounted) return;
+                            _readerCubit.updateTotalSlots(data.pages.length);
+                            _readerCubit.updatePageIndex(_pageIndex);
+                            setState(() {});
+                            unawaited(_saveProgressNow());
+                          });
+                        }
+                        _scheduleInitialPageRestore();
+                        return _ReaderImageList(
+                          pageKeys: _pageKeys,
+                          pages: data.pages,
+                          imageSizes: _imageSizes,
+                          controller: _scrollController,
+                          observerController: _observerController,
+                          onPageObserved: _handleObservedPageIndex,
                           onRetry: _reloadChapter,
+                          onSizeResolved: _handleImageSizeResolved,
                         );
-                      }
-
-                      final data = snapshot.requireData;
-                      if (data.images.isEmpty) {
-                        return _ReaderEmptyView(onRetry: _reloadChapter);
-                      }
-
-                      final imagesChanged = _syncChapterImages(data.images);
-                      if (imagesChanged) {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (!mounted) return;
-                          setState(() {});
-                          unawaited(_saveProgressNow());
-                        });
-                      }
-                      _scheduleInitialPageRestore();
-                      return _ReaderImageList(
-                        pageKeys: _pageKeys,
-                        images: data.images,
-                        imageSizes: _imageSizes,
-                        controller: _scrollController,
-                        onRetry: _reloadChapter,
-                        onSizeResolved: _handleImageSizeResolved,
-                      );
-                    },
+                      },
+                    ),
                   ),
                 ),
               ),
-            ),
-            _ReaderTopBar(
-              title: widget.comic.title,
-              chapterTitle: _chapterTitle(_chapterIndex),
-              isVisible: _isMenuVisible,
-              onRefresh: _reloadChapter,
-            ),
-            _ReaderBottomOverlay(
-              isVisible: _isMenuVisible,
-              child: _ReaderBottomBar(
-                chapterCount: widget.chapters.length,
-                pageIndex: _pageIndex,
-                pageCount: _chapterImages.length,
-                hasPrevious: hasPrevious,
-                hasNext: hasNext,
-                onProgressChangeStart: _handleProgressChangeStart,
-                onProgressChanged: _handleProgressChanged,
-                onProgressChangeEnd: _handleProgressChangeEnd,
-                onPrevious: () => _goToChapter(_chapterIndex - 1),
-                onChapterPicker: _showChapterPicker,
-                onNext: () => _goToChapter(_chapterIndex + 1),
+              _ReaderTopBar(
+                title: widget.comic.title,
+                chapterTitle: _chapterTitle(_chapterIndex),
+                isVisible: _isMenuVisible,
+                onRefresh: _reloadChapter,
               ),
-            ),
-            if (_isRestoringInitialPage)
-              const Positioned.fill(
-                child: ColoredBox(
-                  color: Colors.black,
-                  child: Center(
-                    child: CircularProgressIndicator(color: Colors.white),
-                  ),
+              _ReaderBottomOverlay(
+                isVisible: _isMenuVisible,
+                child: _ReaderBottomBar(
+                  chapterCount: widget.chapters.length,
+                  pageIndex: _pageIndex,
+                  pageCount: _chapterPages.length,
+                  hasPrevious: hasPrevious,
+                  hasNext: hasNext,
+                  onProgressChangeStart: _handleProgressChangeStart,
+                  onProgressChanged: _handleProgressChanged,
+                  onProgressChangeEnd: _handleProgressChangeEnd,
+                  onPrevious: () => _goToChapter(_chapterIndex - 1),
+                  onChapterPicker: _showChapterPicker,
+                  onNext: () => _goToChapter(_chapterIndex + 1),
                 ),
               ),
-          ],
+              if (_isRestoringInitialPage)
+                const Positioned.fill(
+                  child: ColoredBox(
+                    color: Colors.black,
+                    child: Center(
+                      child: CircularProgressIndicator(color: Colors.white),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -692,40 +721,54 @@ class _ReaderBottomOverlay extends StatelessWidget {
 
 class _ReaderImageList extends StatelessWidget {
   final List<GlobalKey> pageKeys;
-  final List<String> images;
+  final List<ReaderPageImage> pages;
   final Map<String, Size> imageSizes;
   final ScrollController controller;
+  final ListObserverController observerController;
+  final ValueChanged<int> onPageObserved;
   final VoidCallback onRetry;
   final void Function(String url, Size size, int index) onSizeResolved;
 
   const _ReaderImageList({
     required this.pageKeys,
-    required this.images,
+    required this.pages,
     required this.imageSizes,
     required this.controller,
+    required this.observerController,
+    required this.onPageObserved,
     required this.onRetry,
     required this.onSizeResolved,
   });
 
   @override
   Widget build(BuildContext context) {
-    return ListView.builder(
+    final listView = ListView.builder(
       controller: controller,
       cacheExtent: MediaQuery.sizeOf(context).height * 2,
       padding: const EdgeInsets.only(bottom: 16),
-      itemCount: images.length,
+      itemCount: pages.length,
       itemBuilder: (context, index) {
+        final page = pages[index];
         return _ReaderImage(
           key: pageKeys[index],
-          url: images[index],
+          url: page.url,
           pageNumber: index + 1,
-          pageCount: images.length,
-          knownSize: imageSizes[images[index]],
+          pageCount: pages.length,
+          knownSize: imageSizes[page.cacheKey],
           onRetry: onRetry,
-          onSizeResolved: (size) =>
-              onSizeResolved(images[index], size, index),
+          onSizeResolved: (size) => onSizeResolved(page.cacheKey, size, index),
         );
       },
+    );
+
+    return ListViewObserver(
+      controller: observerController,
+      onObserve: (resultMap) {
+        final visibleIndexes = resultMap.displayingChildIndexList;
+        if (visibleIndexes.isEmpty) return;
+        onPageObserved(visibleIndexes[visibleIndexes.length ~/ 2]);
+      },
+      child: listView,
     );
   }
 }
@@ -1087,10 +1130,4 @@ class _ImageErrorView extends StatelessWidget {
       ),
     );
   }
-}
-
-class _ReaderChapterData {
-  final List<String> images;
-
-  const _ReaderChapterData({required this.images});
 }
