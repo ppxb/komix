@@ -251,25 +251,52 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
   }
 
   Widget _buildSearchBar() {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
       child: TextField(
         controller: _searchController,
         textInputAction: TextInputAction.search,
+        style: const TextStyle(fontSize: 14),
         decoration: InputDecoration(
           hintText: '在${_providerName}中搜索...',
-          prefixIcon: const Icon(Icons.search),
+          isDense: true,
+          filled: true,
+          fillColor: colorScheme.surfaceContainerHighest,
+          contentPadding: const EdgeInsets.symmetric(vertical: 10),
+          prefixIcon: const Icon(Icons.search, size: 20),
+          prefixIconConstraints: const BoxConstraints.tightFor(
+            width: 40,
+            height: 38,
+          ),
           suffixIcon: _searchController.text.isEmpty
               ? null
               : IconButton(
                   tooltip: '清空',
-                  icon: const Icon(Icons.clear),
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.clear, size: 18),
                   onPressed: () {
                     _searchController.clear();
                     setState(() {});
                   },
                 ),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(28)),
+          suffixIconConstraints: const BoxConstraints.tightFor(
+            width: 40,
+            height: 38,
+          ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(18),
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(18),
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(18),
+            borderSide: BorderSide.none,
+          ),
         ),
         onSubmitted: _search,
       ),

@@ -14,7 +14,9 @@ class SearchPage extends StatefulWidget {
 }
 
 class _SearchPageState extends State<SearchPage> {
-  static const int _previewLimit = 8;
+  static const int _previewLimit = 20;
+  static const double _previewListHeight = 174;
+  static const double _previewCardWidth = 96;
 
   final TextEditingController _searchController = TextEditingController();
   final SearchAggregator _searchAggregator = SearchAggregator();
@@ -78,19 +80,33 @@ class _SearchPageState extends State<SearchPage> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Column(
       children: [
         // 搜索框
         Padding(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: TextField(
             controller: _searchController,
+            textInputAction: TextInputAction.search,
+            style: const TextStyle(fontSize: 14),
             decoration: InputDecoration(
               hintText: '搜索漫画...',
-              prefixIcon: const Icon(Icons.search),
+              isDense: true,
+              filled: true,
+              fillColor: colorScheme.surfaceContainerHighest,
+              contentPadding: const EdgeInsets.symmetric(vertical: 10),
+              prefixIcon: const Icon(Icons.search, size: 20),
+              prefixIconConstraints: const BoxConstraints.tightFor(
+                width: 40,
+                height: 38,
+              ),
               suffixIcon: _searchController.text.isNotEmpty
                   ? IconButton(
-                      icon: const Icon(Icons.clear),
+                      tooltip: '清空',
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.clear, size: 18),
                       onPressed: () {
                         _searchController.clear();
                         setState(() {
@@ -100,8 +116,21 @@ class _SearchPageState extends State<SearchPage> {
                       },
                     )
                   : null,
+              suffixIconConstraints: const BoxConstraints.tightFor(
+                width: 40,
+                height: 38,
+              ),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(28),
+                borderRadius: BorderRadius.circular(18),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+                borderSide: BorderSide.none,
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+                borderSide: BorderSide.none,
               ),
             ),
             onSubmitted: _performSearch,
@@ -156,9 +185,9 @@ class _SearchPageState extends State<SearchPage> {
     }
 
     return ListView.separated(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
       itemCount: entries.length,
-      separatorBuilder: (context, index) => const SizedBox(height: 24),
+      separatorBuilder: (context, index) => const SizedBox(height: 16),
       itemBuilder: (context, index) {
         final entry = entries[index];
         return _buildProviderSection(entry.key, entry.value);
@@ -182,26 +211,27 @@ class _SearchPageState extends State<SearchPage> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  fontSize: 18,
+                  fontSize: 16,
                   fontWeight: FontWeight.bold,
                 ),
               ),
             ),
-            const SizedBox(width: 12),
             IconButton(
               tooltip: '查看$providerName',
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints.tightFor(width: 36, height: 36),
               icon: const Icon(Icons.chevron_right),
               onPressed: () => _openProviderResults(providerId, result),
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 4),
         SizedBox(
-          height: 224,
+          height: _previewListHeight,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             itemCount: previewItems.length,
-            separatorBuilder: (context, index) => const SizedBox(width: 10),
+            separatorBuilder: (context, index) => const SizedBox(width: 8),
             itemBuilder: (context, index) {
               final comic = previewItems[index];
               return _buildComicCard(providerId, comic);
@@ -226,7 +256,7 @@ class _SearchPageState extends State<SearchPage> {
 
   Widget _buildComicCard(String providerId, Comic comic) {
     return SizedBox(
-      width: 128,
+      width: _previewCardWidth,
       child: Card(
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -258,7 +288,7 @@ class _SearchPageState extends State<SearchPage> {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.all(8.0),
+                padding: const EdgeInsets.all(6.0),
                 child: Text(
                   comic.title,
                   maxLines: 2,
