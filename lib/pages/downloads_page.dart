@@ -141,6 +141,39 @@ class _DownloadsPageState extends State<DownloadsPage> {
     );
   }
 
+  Future<void> _deleteDownloaded(DownloadedComic downloaded) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('删除下载'),
+          content: Text('确定要删除《${downloaded.title}》的下载记录和本地文件吗？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('删除'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+
+    try {
+      await DownloadService.instance.deleteDownloadedComic(downloaded);
+      if (!mounted) return;
+      _showMessage('已删除下载');
+      await _refreshAll();
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage(error.toString());
+    }
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.of(
       context,
@@ -172,6 +205,7 @@ class _DownloadsPageState extends State<DownloadsPage> {
               future: _downloadedFuture,
               onRefresh: _refreshAll,
               onOpen: _openDownloaded,
+              onDelete: _deleteDownloaded,
             ),
           ],
         ),
@@ -181,6 +215,8 @@ class _DownloadsPageState extends State<DownloadsPage> {
 }
 
 enum _DownloadTaskAction { cancel, retry, remove }
+
+enum _DownloadedAction { open, delete }
 
 class _DownloadTaskList extends StatelessWidget {
   final Future<List<DownloadTaskView>> future;
@@ -284,11 +320,13 @@ class _DownloadedList extends StatelessWidget {
   final Future<List<DownloadedComic>> future;
   final RefreshCallback onRefresh;
   final Future<void> Function(DownloadedComic downloaded) onOpen;
+  final Future<void> Function(DownloadedComic downloaded) onDelete;
 
   const _DownloadedList({
     required this.future,
     required this.onRefresh,
     required this.onOpen,
+    required this.onDelete,
   });
 
   @override
@@ -340,7 +378,34 @@ class _DownloadedList extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                trailing: const Icon(Icons.chevron_right),
+                trailing: PopupMenuButton<_DownloadedAction>(
+                  onSelected: (action) {
+                    switch (action) {
+                      case _DownloadedAction.open:
+                        unawaited(onOpen(item));
+                        return;
+                      case _DownloadedAction.delete:
+                        unawaited(onDelete(item));
+                        return;
+                    }
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                      value: _DownloadedAction.open,
+                      child: ListTile(
+                        leading: Icon(Icons.menu_book_outlined),
+                        title: Text('阅读'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: _DownloadedAction.delete,
+                      child: ListTile(
+                        leading: Icon(Icons.delete_outline),
+                        title: Text('删除下载'),
+                      ),
+                    ),
+                  ],
+                ),
                 onTap: () => unawaited(onOpen(item)),
               );
             },

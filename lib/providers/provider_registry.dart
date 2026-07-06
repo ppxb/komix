@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'base_provider.dart';
+import 'bika_provider.dart';
 import 'jm_provider.dart';
 
 /// 数据源注册表
@@ -18,6 +19,9 @@ class ProviderRegistry extends ChangeNotifier {
   void _registerProviders() {
     final jmProvider = JmProvider();
     _providers[jmProvider.id] = jmProvider;
+
+    final bikaProvider = BikaProvider();
+    _providers[bikaProvider.id] = bikaProvider;
 
     // 默认订阅 JM 源
     _subscribedProviders.add(jmProvider.id);

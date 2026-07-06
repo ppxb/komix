@@ -71,6 +71,9 @@ class _SubscribePageState extends State<SubscribePage>
         if (subscribedProviders.isEmpty) {
           return _buildEmptyState();
         }
+        if (_selectedProviderIndex >= subscribedProviders.length) {
+          _selectedProviderIndex = subscribedProviders.length - 1;
+        }
 
         return Column(
           children: [

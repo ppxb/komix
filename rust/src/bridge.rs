@@ -1,3 +1,4 @@
+use crate::api::bika::BikaClient;
 use crate::api::jm::JmClient;
 use crate::decode::ImageInfo;
 
@@ -71,6 +72,91 @@ pub async fn jm_get_latest(page: i32) -> Result<String, String> {
 pub async fn jm_get_ranking(category: String, order: String, page: i32) -> Result<String, String> {
     let client = JmClient::new();
     match client.get_ranking(&category, &order, page).await {
+        Ok(result) => serde_json::to_string(&result).map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 登录哔咔
+pub async fn bika_login(email: String, password: String) -> Result<String, String> {
+    BikaClient::login(&email, &password)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// 搜索漫画 (哔咔源)
+pub async fn bika_search(
+    keyword: String,
+    page: i32,
+    authorization: String,
+) -> Result<String, String> {
+    let client = BikaClient::new(authorization);
+    match client.search(&keyword, page).await {
+        Ok(result) => serde_json::to_string(&result).map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 获取漫画详情 (哔咔源)
+pub async fn bika_get_comic_detail(
+    comic_id: String,
+    authorization: String,
+) -> Result<String, String> {
+    let client = BikaClient::new(authorization);
+    match client.get_comic_detail(&comic_id).await {
+        Ok(comic) => serde_json::to_string(&comic).map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 获取章节列表 (哔咔源)
+pub async fn bika_get_chapters(
+    comic_id: String,
+    authorization: String,
+) -> Result<String, String> {
+    let client = BikaClient::new(authorization);
+    match client.get_chapters(&comic_id).await {
+        Ok(chapters) => serde_json::to_string(&chapters).map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 获取章节图片 (哔咔源)
+pub async fn bika_get_chapter_images(
+    comic_id: String,
+    chapter_order: i32,
+    authorization: String,
+) -> Result<String, String> {
+    let client = BikaClient::new(authorization);
+    match client.get_chapter_images(&comic_id, chapter_order).await {
+        Ok(images) => serde_json::to_string(&images).map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 获取最新更新 (哔咔源)
+pub async fn bika_get_latest(page: i32, authorization: String) -> Result<String, String> {
+    let client = BikaClient::new(authorization);
+    match client.get_latest(page).await {
+        Ok(result) => serde_json::to_string(&result).map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 获取排行榜 (哔咔源)
+pub async fn bika_get_ranking(
+    category: String,
+    order: String,
+    page: i32,
+    authorization: String,
+) -> Result<String, String> {
+    let client = BikaClient::new(authorization);
+    let ranking_order = if order.trim().is_empty() {
+        category
+    } else {
+        order
+    };
+    match client.get_ranking(&ranking_order).await {
         Ok(result) => serde_json::to_string(&result).map_err(|e| e.to_string()),
         Err(e) => Err(e.to_string()),
     }

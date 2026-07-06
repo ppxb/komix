@@ -6,9 +6,9 @@ import 'package:flutter/services.dart';
 import '../models/comic.dart';
 import '../providers/provider_registry.dart';
 import '../services/comic_detail_cache_service.dart';
-import '../services/download_service.dart';
 import '../services/favorite_service.dart';
 import '../services/reading_progress_service.dart';
+import 'download_chapter_selection_page.dart';
 import 'reader_page.dart';
 
 class ComicDetailPage extends StatefulWidget {
@@ -167,13 +167,24 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
 
     try {
       final data = await _detailFuture;
-      final enqueued = await DownloadService.instance.enqueueComic(
-        providerId: widget.providerId,
-        comic: data.comic,
-        chapters: data.chapters,
+      if (data.chapters.isEmpty) {
+        throw StateError('暂无可下载章节');
+      }
+      if (!mounted) return;
+
+      final enqueued = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (context) => DownloadChapterSelectionPage(
+            providerId: widget.providerId,
+            comic: data.comic,
+            chapters: data.chapters,
+          ),
+        ),
       );
       if (!mounted) return;
-      _showPendingMessage(enqueued ? '已加入下载队列' : '下载任务已存在');
+      if (enqueued == true) {
+        _showPendingMessage('已加入下载队列');
+      }
     } catch (error) {
       if (!mounted) return;
       _showPendingMessage(error.toString());

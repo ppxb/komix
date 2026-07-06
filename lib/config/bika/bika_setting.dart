@@ -1,4 +1,3 @@
-@Deprecated('不再使用，仅作为迁移时作为参考数据结构')
 class BikaSettingState {
   final String account;
   final String password;

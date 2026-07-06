@@ -76,6 +76,45 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
+  Future<String> crateBridgeBikaGetChapterImages({
+    required String comicId,
+    required int chapterOrder,
+    required String authorization,
+  });
+
+  Future<String> crateBridgeBikaGetChapters({
+    required String comicId,
+    required String authorization,
+  });
+
+  Future<String> crateBridgeBikaGetComicDetail({
+    required String comicId,
+    required String authorization,
+  });
+
+  Future<String> crateBridgeBikaGetLatest({
+    required int page,
+    required String authorization,
+  });
+
+  Future<String> crateBridgeBikaGetRanking({
+    required String category,
+    required String order,
+    required int page,
+    required String authorization,
+  });
+
+  Future<String> crateBridgeBikaLogin({
+    required String email,
+    required String password,
+  });
+
+  Future<String> crateBridgeBikaSearch({
+    required String keyword,
+    required int page,
+    required String authorization,
+  });
+
   Future<void> crateBridgeDecodeJmImageToDisk({
     required List<int> imageData,
     required int chapterId,
@@ -112,6 +151,257 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required super.generalizedFrbRustBinding,
     required super.portManager,
   });
+
+  @override
+  Future<String> crateBridgeBikaGetChapterImages({
+    required String comicId,
+    required int chapterOrder,
+    required String authorization,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(comicId, serializer);
+          sse_encode_i_32(chapterOrder, serializer);
+          sse_encode_String(authorization, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateBridgeBikaGetChapterImagesConstMeta,
+        argValues: [comicId, chapterOrder, authorization],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateBridgeBikaGetChapterImagesConstMeta =>
+      const TaskConstMeta(
+        debugName: "bika_get_chapter_images",
+        argNames: ["comicId", "chapterOrder", "authorization"],
+      );
+
+  @override
+  Future<String> crateBridgeBikaGetChapters({
+    required String comicId,
+    required String authorization,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(comicId, serializer);
+          sse_encode_String(authorization, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 10,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateBridgeBikaGetChaptersConstMeta,
+        argValues: [comicId, authorization],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateBridgeBikaGetChaptersConstMeta =>
+      const TaskConstMeta(
+        debugName: "bika_get_chapters",
+        argNames: ["comicId", "authorization"],
+      );
+
+  @override
+  Future<String> crateBridgeBikaGetComicDetail({
+    required String comicId,
+    required String authorization,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(comicId, serializer);
+          sse_encode_String(authorization, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateBridgeBikaGetComicDetailConstMeta,
+        argValues: [comicId, authorization],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateBridgeBikaGetComicDetailConstMeta =>
+      const TaskConstMeta(
+        debugName: "bika_get_comic_detail",
+        argNames: ["comicId", "authorization"],
+      );
+
+  @override
+  Future<String> crateBridgeBikaGetLatest({
+    required int page,
+    required String authorization,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_i_32(page, serializer);
+          sse_encode_String(authorization, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateBridgeBikaGetLatestConstMeta,
+        argValues: [page, authorization],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateBridgeBikaGetLatestConstMeta =>
+      const TaskConstMeta(
+        debugName: "bika_get_latest",
+        argNames: ["page", "authorization"],
+      );
+
+  @override
+  Future<String> crateBridgeBikaGetRanking({
+    required String category,
+    required String order,
+    required int page,
+    required String authorization,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(category, serializer);
+          sse_encode_String(order, serializer);
+          sse_encode_i_32(page, serializer);
+          sse_encode_String(authorization, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 13,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateBridgeBikaGetRankingConstMeta,
+        argValues: [category, order, page, authorization],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateBridgeBikaGetRankingConstMeta =>
+      const TaskConstMeta(
+        debugName: "bika_get_ranking",
+        argNames: ["category", "order", "page", "authorization"],
+      );
+
+  @override
+  Future<String> crateBridgeBikaLogin({
+    required String email,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(email, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 14,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateBridgeBikaLoginConstMeta,
+        argValues: [email, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateBridgeBikaLoginConstMeta => const TaskConstMeta(
+    debugName: "bika_login",
+    argNames: ["email", "password"],
+  );
+
+  @override
+  Future<String> crateBridgeBikaSearch({
+    required String keyword,
+    required int page,
+    required String authorization,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(keyword, serializer);
+          sse_encode_i_32(page, serializer);
+          sse_encode_String(authorization, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 15,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateBridgeBikaSearchConstMeta,
+        argValues: [keyword, page, authorization],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateBridgeBikaSearchConstMeta => const TaskConstMeta(
+    debugName: "bika_search",
+    argNames: ["keyword", "page", "authorization"],
+  );
 
   @override
   Future<void> crateBridgeDecodeJmImageToDisk({

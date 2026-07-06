@@ -52,3 +52,69 @@ Future<String> jmGetRanking({
   order: order,
   page: page,
 );
+
+/// 登录哔咔
+Future<String> bikaLogin({required String email, required String password}) =>
+    RustLib.instance.api.crateBridgeBikaLogin(email: email, password: password);
+
+/// 搜索漫画 (哔咔源)
+Future<String> bikaSearch({
+  required String keyword,
+  required int page,
+  required String authorization,
+}) => RustLib.instance.api.crateBridgeBikaSearch(
+  keyword: keyword,
+  page: page,
+  authorization: authorization,
+);
+
+/// 获取漫画详情 (哔咔源)
+Future<String> bikaGetComicDetail({
+  required String comicId,
+  required String authorization,
+}) => RustLib.instance.api.crateBridgeBikaGetComicDetail(
+  comicId: comicId,
+  authorization: authorization,
+);
+
+/// 获取章节列表 (哔咔源)
+Future<String> bikaGetChapters({
+  required String comicId,
+  required String authorization,
+}) => RustLib.instance.api.crateBridgeBikaGetChapters(
+  comicId: comicId,
+  authorization: authorization,
+);
+
+/// 获取章节图片 (哔咔源)
+Future<String> bikaGetChapterImages({
+  required String comicId,
+  required int chapterOrder,
+  required String authorization,
+}) => RustLib.instance.api.crateBridgeBikaGetChapterImages(
+  comicId: comicId,
+  chapterOrder: chapterOrder,
+  authorization: authorization,
+);
+
+/// 获取最新更新 (哔咔源)
+Future<String> bikaGetLatest({
+  required int page,
+  required String authorization,
+}) => RustLib.instance.api.crateBridgeBikaGetLatest(
+  page: page,
+  authorization: authorization,
+);
+
+/// 获取排行榜 (哔咔源)
+Future<String> bikaGetRanking({
+  required String category,
+  required String order,
+  required int page,
+  required String authorization,
+}) => RustLib.instance.api.crateBridgeBikaGetRanking(
+  category: category,
+  order: order,
+  page: page,
+  authorization: authorization,
+);

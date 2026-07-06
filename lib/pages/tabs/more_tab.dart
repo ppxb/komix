@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../providers/bika_provider.dart';
 import '../../providers/provider_registry.dart';
 import '../downloads_page.dart';
 import '../system_settings_page.dart';
@@ -221,17 +222,31 @@ class _ProviderManagementSheet extends StatelessWidget {
                       final provider = allProviders[index];
                       final isSubscribed = registry.isSubscribed(provider.id);
 
-                      return SwitchListTile(
+                      return ListTile(
                         title: Text(provider.name),
                         subtitle: Text(provider.id),
-                        value: isSubscribed,
-                        onChanged: (value) {
-                          if (value) {
-                            registry.subscribe(provider.id);
-                          } else {
-                            registry.unsubscribe(provider.id);
-                          }
-                        },
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (provider is BikaProvider)
+                              IconButton(
+                                tooltip: '登录设置',
+                                icon: const Icon(Icons.manage_accounts),
+                                onPressed: () =>
+                                    _showBikaLoginSheet(context, provider),
+                              ),
+                            Switch(
+                              value: isSubscribed,
+                              onChanged: (value) {
+                                if (value) {
+                                  registry.subscribe(provider.id);
+                                } else {
+                                  registry.unsubscribe(provider.id);
+                                }
+                              },
+                            ),
+                          ],
+                        ),
                       );
                     },
                   );
@@ -241,6 +256,158 @@ class _ProviderManagementSheet extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+
+  void _showBikaLoginSheet(BuildContext context, BikaProvider provider) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => _BikaLoginSheet(provider: provider),
+    );
+  }
+}
+
+class _BikaLoginSheet extends StatefulWidget {
+  final BikaProvider provider;
+
+  const _BikaLoginSheet({required this.provider});
+
+  @override
+  State<_BikaLoginSheet> createState() => _BikaLoginSheetState();
+}
+
+class _BikaLoginSheetState extends State<_BikaLoginSheet> {
+  late final TextEditingController _accountController;
+  late final TextEditingController _passwordController;
+  bool _isLoading = false;
+  bool _obscurePassword = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final setting = widget.provider.setting;
+    _accountController = TextEditingController(text: setting.account);
+    _passwordController = TextEditingController(text: setting.password);
+  }
+
+  @override
+  void dispose() {
+    _accountController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _login() async {
+    if (_isLoading) return;
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      await widget.provider.loginWithPassword(
+        account: _accountController.text,
+        password: _passwordController.text,
+      );
+      if (!mounted) return;
+      _showMessage('哔咔登录成功');
+      Navigator.of(context).pop();
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage(error.toString());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _clearSession() async {
+    await widget.provider.clearSession();
+    if (!mounted) return;
+    _showMessage('已清理登录状态');
+    Navigator.of(context).pop();
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final hasToken = widget.provider.hasAuthorization;
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(16, 0, 16, bottomInset + 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('哔咔账号', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _accountController,
+              keyboardType: TextInputType.emailAddress,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(
+                labelText: '账号',
+                prefixIcon: Icon(Icons.person_outline),
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passwordController,
+              obscureText: _obscurePassword,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _login(),
+              decoration: InputDecoration(
+                labelText: '密码',
+                prefixIcon: const Icon(Icons.lock_outline),
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  tooltip: _obscurePassword ? '显示密码' : '隐藏密码',
+                  icon: Icon(
+                    _obscurePassword
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _obscurePassword = !_obscurePassword;
+                    });
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _isLoading ? null : _login,
+              icon: _isLoading
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.login),
+              label: const Text('登录'),
+            ),
+            if (hasToken) ...[
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: _isLoading ? null : () => _clearSession(),
+                icon: const Icon(Icons.logout),
+                label: const Text('清理登录状态'),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

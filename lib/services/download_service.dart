@@ -38,6 +38,7 @@ class DownloadTaskView {
 
   bool get isFailed => isCompleted && status.startsWith('下载失败');
   bool get isCancelled => isCompleted && status.startsWith('已取消');
+  bool get isWaiting => !isCompleted && !isDownloading;
 }
 
 class DownloadedComic {
@@ -116,9 +117,16 @@ class DownloadedPageImage {
 
 class _DownloadedChapterRecord {
   final Chapter chapter;
+  final String logicalKey;
+  final String taskChapterId;
   final List<DownloadedPageImage> images;
 
-  const _DownloadedChapterRecord({required this.chapter, required this.images});
+  const _DownloadedChapterRecord({
+    required this.chapter,
+    required this.logicalKey,
+    required this.taskChapterId,
+    required this.images,
+  });
 
   Map<String, dynamic> toMap() {
     return {
@@ -126,11 +134,25 @@ class _DownloadedChapterRecord {
       'name': chapter.name,
       'order': chapter.order,
       'comic_id': chapter.comicId,
-      'logicalKey': chapter.id,
-      'taskChapterId': chapter.id,
+      'logicalKey': logicalKey,
+      'taskChapterId': taskChapterId,
       'images': images.map((image) => image.toMap()).toList(),
     };
   }
+}
+
+class _DownloadChapterPlan {
+  final Chapter requestChapter;
+  final String storageChapterId;
+  final String logicalKey;
+  final String taskChapterId;
+
+  const _DownloadChapterPlan({
+    required this.requestChapter,
+    required this.storageChapterId,
+    required this.logicalKey,
+    required this.taskChapterId,
+  });
 }
 
 class DownloadService {
@@ -152,41 +174,52 @@ class DownloadService {
     required String providerId,
     required Comic comic,
     required List<Chapter> chapters,
+    List<DownloadChapterTaskRef>? chapterRefs,
   }) async {
-    if (chapters.isEmpty) {
+    final refs =
+        chapterRefs ??
+        chapters.map(_chapterRefFromChapter).toList(growable: false);
+    if (refs.isEmpty) {
       throw StateError('暂无可下载章节');
     }
 
-    final existing = _findOpenTask(providerId: providerId, comicId: comic.id);
+    return enqueueTask(
+      DownloadTaskJson(
+        from: providerId,
+        comicId: comic.id,
+        comicName: comic.title,
+        chapterRefs: refs,
+      ),
+    );
+  }
+
+  Future<bool> enqueueTask(DownloadTaskJson downloadTask) async {
+    if (downloadTask.chapterRefs.isEmpty) {
+      throw StateError('暂无可下载章节');
+    }
+
+    final providerId = downloadTask.from.trim();
+    final comicId = downloadTask.comicId.trim();
+    if (providerId.isEmpty || comicId.isEmpty) {
+      throw StateError('下载任务缺少数据源或漫画 ID');
+    }
+
+    final existing = _findOpenTask(providerId: providerId, comicId: comicId);
     if (existing != null) {
       return false;
     }
 
-    final task = DownloadTask()
-      ..comicId = _key(providerId, comic.id)
-      ..comicName = comic.title
+    final dbTask = DownloadTask()
+      ..comicId = _key(providerId, comicId)
+      ..comicName = downloadTask.comicName.trim().isEmpty
+          ? comicId
+          : downloadTask.comicName
       ..isCompleted = false
       ..isDownloading = false
       ..status = '等待下载'
-      ..taskInfo = DownloadTaskJson(
-        from: providerId,
-        comicId: comic.id,
-        comicName: comic.title,
-        chapterRefs: chapters
-            .map(
-              (chapter) => DownloadChapterTaskRef(
-                chapterId: chapter.id,
-                requestId: chapter.id,
-                storageChapterId: chapter.id,
-                logicalKey: chapter.id,
-                title: chapter.name,
-                order: chapter.order,
-              ),
-            )
-            .toList(growable: false),
-      );
+      ..taskInfo = downloadTask;
 
-    objectbox.downloadTaskBox.put(task);
+    objectbox.downloadTaskBox.put(dbTask);
     _notifyChanged();
     unawaited(_processQueue());
     return true;
@@ -214,6 +247,41 @@ class DownloadService {
         .toList();
     items.sort((a, b) => b.downloadedAt.compareTo(a.downloadedAt));
     return items;
+  }
+
+  Future<Set<String>> getDownloadedChapterKeys({
+    required String providerId,
+    required String comicId,
+  }) async {
+    final download = _findDownloadedComic(_key(providerId, comicId));
+    if (download == null || download.deleted) {
+      return const <String>{};
+    }
+
+    final keys = <String>{};
+    for (final chapter in _decodeListOfMaps(download.chapters)) {
+      _addNonEmpty(keys, chapter['id']);
+      _addNonEmpty(keys, chapter['logicalKey']);
+      _addNonEmpty(keys, chapter['taskChapterId']);
+      final order = (chapter['order'] as num?)?.toInt();
+      if (order != null && order > 0) {
+        keys.add(order.toString());
+      }
+    }
+    return keys;
+  }
+
+  Future<void> deleteDownloadedComic(DownloadedComic download) async {
+    final key = _key(download.providerId, download.comicId);
+    final existing = _findDownloadedComic(key);
+    if (existing != null) {
+      objectbox.unifiedDownloadBox.remove(existing.id);
+    }
+    await _deleteDownloadedComicFiles(
+      providerId: download.providerId,
+      comicId: download.comicId,
+    );
+    _notifyChanged();
   }
 
   Future<void> cancelTask(int taskId) async {
@@ -330,7 +398,45 @@ class DownloadService {
       }
     } catch (error, stackTrace) {
       logger.w(
-        '删除取消下载文件失败: providerId=$providerId comicId=$comicId',
+        '删除下载文件失败: providerId=$providerId comicId=$comicId',
+        error: error,
+      );
+      logger.d(stackTrace);
+    }
+  }
+
+  Future<void> _deleteDownloadedChapterFiles({
+    required String providerId,
+    required String comicId,
+    required Iterable<String> chapterIds,
+  }) async {
+    if (providerId.trim().isEmpty || comicId.trim().isEmpty) return;
+
+    final sanitizedChapterIds = chapterIds
+        .map((chapterId) => chapterId.trim())
+        .where((chapterId) => chapterId.isNotEmpty)
+        .map(_sanitizeStoredPath)
+        .toSet();
+    if (sanitizedChapterIds.isEmpty) return;
+
+    try {
+      final comicDir = Directory(
+        p.join(
+          await getDownloadPath(),
+          providerId.trim(),
+          'original',
+          _sanitizeStoredPath(comicId),
+        ),
+      );
+      for (final chapterId in sanitizedChapterIds) {
+        final chapterDir = Directory(p.join(comicDir.path, chapterId));
+        if (await chapterDir.exists()) {
+          await chapterDir.delete(recursive: true);
+        }
+      }
+    } catch (error, stackTrace) {
+      logger.w(
+        '删除取消章节文件失败: providerId=$providerId comicId=$comicId',
         error: error,
       );
       logger.d(stackTrace);
@@ -410,15 +516,11 @@ class DownloadService {
       return;
     }
 
-    final chapters = task.chapterRefs
-        .map(
-          (ref) => Chapter(
-            id: ref.chapterId,
-            comicId: task.comicId,
-            name: ref.title.isEmpty ? ref.chapterId : ref.title,
-            order: ref.order,
-          ),
-        )
+    final chapterPlans = task.chapterRefs
+        .map((ref) => _chapterPlanFromRef(ref, task.comicId))
+        .toList(growable: false);
+    final chapters = chapterPlans
+        .map((plan) => plan.requestChapter)
         .toList(growable: false);
     final comic = await _loadComic(
       providerId: task.from,
@@ -444,7 +546,8 @@ class DownloadService {
         chapterIndex++
       ) {
         _throwIfCancelled(dbTask.id);
-        final chapter = chapters[chapterIndex];
+        final plan = chapterPlans[chapterIndex];
+        final chapter = plan.requestChapter;
         dbTask.status = '获取章节 ${chapterIndex + 1}/${chapters.length}';
         objectbox.downloadTaskBox.put(dbTask);
         _notifyChanged();
@@ -477,7 +580,7 @@ class DownloadService {
             ProviderImageCache.downloadPicture(
               providerId: snapshot.providerId,
               comicId: snapshot.comic.id,
-              chapterId: snapshot.chapter.id,
+              chapterId: plan.storageChapterId,
               url: page.url,
               path: page.path,
               pictureType: _pictureTypeFromExtern(page.extern),
@@ -502,7 +605,14 @@ class DownloadService {
         }
         downloadedChapters.add(
           _DownloadedChapterRecord(
-            chapter: chapter,
+            chapter: Chapter(
+              id: plan.storageChapterId,
+              comicId: task.comicId,
+              name: chapter.name,
+              order: chapter.order,
+            ),
+            logicalKey: plan.logicalKey,
+            taskChapterId: plan.taskChapterId,
             images: List<DownloadedPageImage>.unmodifiable(downloadedImages),
           ),
         );
@@ -521,9 +631,10 @@ class DownloadService {
       objectbox.downloadTaskBox.put(dbTask);
       _notifyChanged();
     } on _DownloadCancelled {
-      await _deleteDownloadedComicFiles(
+      await _deleteDownloadedChapterFiles(
         providerId: task.from,
         comicId: task.comicId,
+        chapterIds: chapterPlans.map((plan) => plan.storageChapterId),
       );
       dbTask
         ..isCompleted = true
@@ -534,9 +645,10 @@ class DownloadService {
       _notifyChanged();
     } catch (error, stackTrace) {
       if (_cancelledTaskIds.contains(dbTask.id)) {
-        await _deleteDownloadedComicFiles(
+        await _deleteDownloadedChapterFiles(
           providerId: task.from,
           comicId: task.comicId,
+          chapterIds: chapterPlans.map((plan) => plan.storageChapterId),
         );
         dbTask
           ..isCompleted = true
@@ -585,6 +697,10 @@ class DownloadService {
       'original',
       _sanitizeStoredPath(comic.id),
     );
+    final mergedChapters = _mergeDownloadedChapters(
+      existing?.chapters,
+      chapters,
+    );
 
     objectbox.unifiedDownloadBox.put(
       UnifiedComicDownload(
@@ -612,9 +728,7 @@ class DownloadService {
         allowLike: false,
         allowFavorite: true,
         allowDownload: true,
-        chapters: jsonEncode(
-          chapters.map((chapter) => chapter.toMap()).toList(),
-        ),
+        chapters: jsonEncode(mergedChapters),
         detailJson: jsonEncode(comic.toJson()),
         storageRoot: storageRoot,
         createdAt: existing?.createdAt ?? now,
@@ -625,6 +739,45 @@ class DownloadService {
       ),
     );
     ComicLinkService.addComic(key, null, ComicFolderType.download);
+  }
+
+  List<Map<String, dynamic>> _mergeDownloadedChapters(
+    String? existingRaw,
+    List<_DownloadedChapterRecord> newChapters,
+  ) {
+    final merged = <String, Map<String, dynamic>>{};
+    if (existingRaw != null && existingRaw.trim().isNotEmpty) {
+      for (final chapter in _decodeListOfMaps(existingRaw)) {
+        final key = _storedChapterMapKey(chapter);
+        if (key.isEmpty) continue;
+        merged[key] = chapter;
+      }
+    }
+
+    for (final chapter in newChapters) {
+      final map = chapter.toMap();
+      merged[_storedChapterMapKey(map)] = map;
+    }
+
+    final items = merged.values.toList(growable: false);
+    items.sort((a, b) {
+      final orderA = (a['order'] as num?)?.toInt() ?? 0;
+      final orderB = (b['order'] as num?)?.toInt() ?? 0;
+      if (orderA != orderB) return orderA.compareTo(orderB);
+      return (a['name']?.toString() ?? '').compareTo(
+        b['name']?.toString() ?? '',
+      );
+    });
+    return items;
+  }
+
+  String _storedChapterMapKey(Map<String, dynamic> chapter) {
+    return _firstNonEmpty([
+      chapter['logicalKey']?.toString() ?? '',
+      chapter['id']?.toString() ?? '',
+      chapter['taskChapterId']?.toString() ?? '',
+      chapter['order']?.toString() ?? '',
+    ]);
   }
 
   UnifiedComicDownload? _findDownloadedComic(String key) {
@@ -902,6 +1055,98 @@ class DownloadService {
 
   void _notifyChanged() {
     revision.value += 1;
+  }
+
+  DownloadChapterTaskRef _chapterRefFromChapter(Chapter chapter) {
+    return DownloadChapterTaskRef(
+      chapterId: chapter.id,
+      requestId: chapter.id,
+      storageChapterId: chapter.id,
+      logicalKey: _chapterSelectionKey(chapter),
+      title: chapter.name,
+      order: chapter.order,
+    );
+  }
+
+  _DownloadChapterPlan _chapterPlanFromRef(
+    DownloadChapterTaskRef ref,
+    String comicId,
+  ) {
+    final requestId = _firstNonEmpty([
+      ref.requestId,
+      ref.chapterId,
+      ref.storageChapterId,
+      ref.logicalKey,
+    ]);
+    final storageChapterId = _firstNonEmpty([
+      ref.storageChapterId,
+      ref.chapterId,
+      ref.logicalKey,
+      requestId,
+    ]);
+    final logicalKey = _firstNonEmpty([
+      ref.logicalKey,
+      ref.chapterId,
+      storageChapterId,
+      requestId,
+    ]);
+    final title = ref.title.trim().isEmpty ? requestId : ref.title.trim();
+    return _DownloadChapterPlan(
+      requestChapter: Chapter(
+        id: requestId,
+        comicId: comicId,
+        name: title,
+        order: ref.order,
+      ),
+      storageChapterId: storageChapterId,
+      logicalKey: logicalKey,
+      taskChapterId: requestId,
+    );
+  }
+
+  static String chapterSelectionKey(Chapter chapter) {
+    return _chapterSelectionKey(chapter);
+  }
+
+  static String _chapterSelectionKey(Chapter chapter) {
+    final id = chapter.id.trim();
+    if (id.isNotEmpty) return id;
+    if (chapter.order > 0) return chapter.order.toString();
+    final name = chapter.name.trim();
+    return name.isEmpty ? '_' : name;
+  }
+
+  static String _firstNonEmpty(Iterable<String> values) {
+    for (final value in values) {
+      final trimmed = value.trim();
+      if (trimmed.isNotEmpty) return trimmed;
+    }
+    return '_';
+  }
+
+  static void _addNonEmpty(Set<String> keys, Object? value) {
+    final text = value?.toString().trim() ?? '';
+    if (text.isNotEmpty) {
+      keys.add(text);
+    }
+  }
+
+  List<Map<String, dynamic>> _decodeListOfMaps(String raw) {
+    if (raw.trim().isEmpty) {
+      return const <Map<String, dynamic>>[];
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return const <Map<String, dynamic>>[];
+      }
+      return decoded
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList(growable: false);
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
   }
 }
 
