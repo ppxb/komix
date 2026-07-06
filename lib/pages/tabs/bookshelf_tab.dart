@@ -16,9 +16,42 @@ class BookshelfTab extends StatefulWidget {
   State<BookshelfTab> createState() => _BookshelfTabState();
 }
 
+class _BookshelfStyle {
+  static const double searchHeight = 40;
+  static const double clearIconSize = 20;
+  static const double coverWidth = 44;
+  static const double coverHeight = 60;
+  static const double coverRadius = 4;
+  static const double messageIconSize = 64;
+  static const double messageEmojiSize = 42;
+  static const double messageGap = 16;
+
+  static const EdgeInsets filterTitlePadding = EdgeInsets.fromLTRB(
+    24,
+    8,
+    24,
+    4,
+  );
+  static const EdgeInsets filterButtonPadding = EdgeInsets.fromLTRB(
+    24,
+    8,
+    24,
+    0,
+  );
+  static const EdgeInsets filterSheetPadding = EdgeInsets.only(bottom: 16);
+}
+
 class _BookshelfTabState extends State<BookshelfTab> {
   late Future<_BookshelfData> _bookshelfFuture;
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+
   String _currentPath = kComicFolderRootPath;
+  String _searchQuery = '';
+  bool _isSearching = false;
+  bool _showFolders = true;
+  bool _showBooks = true;
+  _BookshelfSort _sort = _BookshelfSort.updatedDesc;
 
   @override
   void initState() {
@@ -30,6 +63,8 @@ class _BookshelfTabState extends State<BookshelfTab> {
   @override
   void dispose() {
     FavoriteService.instance.revision.removeListener(_handleBookshelfChanged);
+    _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -89,21 +124,81 @@ class _BookshelfTabState extends State<BookshelfTab> {
     );
   }
 
-  Future<void> _createFolder() async {
-    final name = await _promptFolderName(title: '新建文件夹', actionText: '创建');
-    if (name == null) return;
+  void _enterSearch() {
+    setState(() {
+      _isSearching = true;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
+  }
 
+  void _exitSearch() {
+    setState(() {
+      _isSearching = false;
+      _searchQuery = '';
+      _searchController.clear();
+    });
+    _searchFocusNode.unfocus();
+  }
+
+  void _handleSearchChanged(String value) {
+    setState(() {
+      _searchQuery = value.trim();
+    });
+  }
+
+  void _clearSearch() {
+    setState(() {
+      _searchQuery = '';
+      _searchController.clear();
+    });
+    _searchFocusNode.requestFocus();
+  }
+
+  Future<void> _performAndRefresh(FutureOr<void> Function() action) async {
     try {
-      ComicFolderService.createFolder(
-        _currentPath,
-        name,
-        ComicFolderType.favorite,
-      );
+      await action();
       await _refreshBookshelf();
     } catch (error) {
       if (!mounted) return;
       _showMessage(error.toString());
     }
+  }
+
+  Future<void> _showShelfFilters() async {
+    final result = await showModalBottomSheet<_BookshelfFilterState>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => _BookshelfFilterSheet(
+        initialState: _BookshelfFilterState(
+          showFolders: _showFolders,
+          showBooks: _showBooks,
+          sort: _sort,
+        ),
+      ),
+    );
+
+    if (result == null || !mounted) return;
+    setState(() {
+      _showFolders = result.showFolders;
+      _showBooks = result.showBooks;
+      _sort = result.sort;
+    });
+  }
+
+  Future<void> _createFolder() async {
+    final name = await _promptFolderName(title: '新建文件夹', actionText: '创建');
+    if (name == null) return;
+
+    await _performAndRefresh(
+      () => ComicFolderService.createFolder(
+        _currentPath,
+        name,
+        ComicFolderType.favorite,
+      ),
+    );
   }
 
   Future<void> _renameFolder(ComicFolder folder) async {
@@ -115,13 +210,13 @@ class _BookshelfTabState extends State<BookshelfTab> {
     );
     if (name == null || name == folder.name) return;
 
-    try {
-      ComicFolderService.renameFolder(path, name, ComicFolderType.favorite);
-      await _refreshBookshelf();
-    } catch (error) {
-      if (!mounted) return;
-      _showMessage(error.toString());
-    }
+    await _performAndRefresh(
+      () => ComicFolderService.renameFolder(
+        path,
+        name,
+        ComicFolderType.favorite,
+      ),
+    );
   }
 
   Future<void> _deleteFolder(ComicFolder folder) async {
@@ -129,27 +224,24 @@ class _BookshelfTabState extends State<BookshelfTab> {
     if (!confirmed) return;
 
     final path = ComicFolderService.folderPath(folder);
-    try {
+    await _performAndRefresh(() {
       ComicLinkService.removeLinksInFolderTree(path, ComicFolderType.favorite);
       ComicFolderService.deleteFolder(path, ComicFolderType.favorite);
-      await _refreshBookshelf();
-    } catch (error) {
-      if (!mounted) return;
-      _showMessage(error.toString());
-    }
+    });
   }
 
   Future<void> _moveBook(FavoriteComic book) async {
     final targetPath = await _chooseTargetFolder();
     if (targetPath == null || targetPath == _currentPath) return;
 
-    ComicLinkService.moveComic(
-      book.uniqueKey,
-      _currentPath,
-      targetPath,
-      ComicFolderType.favorite,
-    );
-    await _refreshBookshelf();
+    await _performAndRefresh(() {
+      ComicLinkService.moveComic(
+        book.uniqueKey,
+        _currentPath,
+        targetPath,
+        ComicFolderType.favorite,
+      );
+    });
   }
 
   Future<void> _removeBook(FavoriteComic book) async {
@@ -278,12 +370,6 @@ class _BookshelfTabState extends State<BookshelfTab> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  String _titleForPath() {
-    if (_currentPath == kComicFolderRootPath) return '书架';
-    final name = _currentPath.split('/').where((part) => part.isNotEmpty).last;
-    return name.isEmpty ? '书架' : name;
-  }
-
   String _parentPath(String path) {
     if (path == kComicFolderRootPath) return kComicFolderRootPath;
     final trimmed = path.endsWith('/')
@@ -294,37 +380,149 @@ class _BookshelfTabState extends State<BookshelfTab> {
     return trimmed.substring(0, index);
   }
 
+  _BookshelfData _prepareData(_BookshelfData data) {
+    final query = _searchQuery.toLowerCase();
+    final folders = _showFolders
+        ? data.folders.where((folder) {
+            if (query.isEmpty) return true;
+            return folder.name.toLowerCase().contains(query);
+          }).toList()
+        : <ComicFolder>[];
+    final books = _showBooks
+        ? data.books.where((book) {
+            if (query.isEmpty) return true;
+            final providerName =
+                ProviderRegistry().getProvider(book.providerId)?.name ??
+                book.providerId;
+            return book.title.toLowerCase().contains(query) ||
+                book.creator.toLowerCase().contains(query) ||
+                providerName.toLowerCase().contains(query) ||
+                book.tags.any((tag) => tag.toLowerCase().contains(query));
+          }).toList()
+        : <FavoriteComic>[];
+
+    switch (_sort) {
+      case _BookshelfSort.updatedDesc:
+        books.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      case _BookshelfSort.titleAsc:
+        folders.sort((a, b) => a.name.compareTo(b.name));
+        books.sort((a, b) => a.title.compareTo(b.title));
+    }
+
+    return _BookshelfData(folders: folders, books: books);
+  }
+
+  Widget _buildAppBarTitle() {
+    final theme = Theme.of(context);
+    if (!_isSearching) return const Text('书架');
+
+    return SizedBox(
+      height: _BookshelfStyle.searchHeight,
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _searchController,
+              focusNode: _searchFocusNode,
+              autofocus: true,
+              style: theme.textTheme.titleMedium,
+              decoration: InputDecoration.collapsed(
+                hintText: '搜索...',
+                hintStyle: theme.textTheme.titleMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              textInputAction: TextInputAction.search,
+              onChanged: _handleSearchChanged,
+            ),
+          ),
+          if (_searchQuery.isNotEmpty)
+            IconButton(
+              tooltip: '清空',
+              icon: const Icon(Icons.close),
+              iconSize: _BookshelfStyle.clearIconSize,
+              visualDensity: VisualDensity.compact,
+              onPressed: _clearSearch,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget? _buildAppBarLeading() {
+    if (_isSearching) {
+      return IconButton(
+        tooltip: '返回书架',
+        icon: const Icon(Icons.arrow_back),
+        onPressed: _exitSearch,
+      );
+    }
+
+    if (_currentPath == kComicFolderRootPath) return null;
+    return IconButton(
+      tooltip: '返回上级',
+      icon: const Icon(Icons.arrow_back),
+      onPressed: _goParentFolder,
+    );
+  }
+
+  List<Widget> _buildAppBarActions() {
+    return [
+      if (!_isSearching)
+        IconButton(
+          tooltip: '搜索',
+          icon: const Icon(Icons.search),
+          onPressed: _enterSearch,
+        ),
+      IconButton(
+        tooltip: '筛选',
+        icon: const Icon(Icons.filter_list),
+        onPressed: _showShelfFilters,
+      ),
+      PopupMenuButton<_BookshelfMenuAction>(
+        tooltip: '更多',
+        icon: const Icon(Icons.more_vert),
+        onSelected: (action) {
+          switch (action) {
+            case _BookshelfMenuAction.createFolder:
+              unawaited(_createFolder());
+          }
+        },
+        itemBuilder: (context) {
+          return const [
+            PopupMenuItem(
+              value: _BookshelfMenuAction.createFolder,
+              child: ListTile(
+                leading: Icon(Icons.create_new_folder_outlined),
+                title: Text('新建文件夹'),
+              ),
+            ),
+          ];
+        },
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        leading: _currentPath == kComicFolderRootPath
-            ? null
-            : IconButton(
-                tooltip: '返回上级',
-                icon: const Icon(Icons.arrow_back),
-                onPressed: _goParentFolder,
-              ),
-        title: Text(_titleForPath()),
-        actions: [
-          IconButton(
-            tooltip: '新建文件夹',
-            icon: const Icon(Icons.create_new_folder_outlined),
-            onPressed: _createFolder,
-          ),
-        ],
+        leading: _buildAppBarLeading(),
+        title: _buildAppBarTitle(),
+        actions: _buildAppBarActions(),
       ),
       body: FutureBuilder<_BookshelfData>(
         future: _bookshelfFuture,
         builder: (context, snapshot) {
-          final data = snapshot.data ?? const _BookshelfData.empty();
+          final rawData = snapshot.data ?? const _BookshelfData.empty();
+          final data = _prepareData(rawData);
 
           if (snapshot.connectionState == ConnectionState.waiting &&
-              data.isEmpty) {
+              rawData.isEmpty) {
             return const Center(child: CircularProgressIndicator());
           }
 
-          if (snapshot.hasError && data.isEmpty) {
+          if (snapshot.hasError && rawData.isEmpty) {
             return _BookshelfMessage(
               icon: Icons.error_outline,
               text: snapshot.error.toString(),
@@ -332,6 +530,12 @@ class _BookshelfTabState extends State<BookshelfTab> {
           }
 
           if (data.isEmpty) {
+            if (rawData.isNotEmpty) {
+              return const _BookshelfMessage.textIcon(
+                iconText: '(･o･;)',
+                text: '没有匹配结果',
+              );
+            }
             return _BookshelfMessage.textIcon(iconText: '(･o･;)', text: '书架为空');
           }
 
@@ -381,6 +585,8 @@ class _BookshelfData {
   int get itemCount => folders.length + books.length;
 
   bool get isEmpty => itemCount == 0;
+
+  bool get isNotEmpty => !isEmpty;
 }
 
 class _FolderTarget {
@@ -508,6 +714,119 @@ enum _FolderAction { rename, delete }
 
 enum _BookshelfAction { move, remove }
 
+enum _BookshelfMenuAction { createFolder }
+
+enum _BookshelfSort { updatedDesc, titleAsc }
+
+class _BookshelfFilterState {
+  final bool showFolders;
+  final bool showBooks;
+  final _BookshelfSort sort;
+
+  const _BookshelfFilterState({
+    required this.showFolders,
+    required this.showBooks,
+    required this.sort,
+  });
+}
+
+class _BookshelfFilterSheet extends StatefulWidget {
+  final _BookshelfFilterState initialState;
+
+  const _BookshelfFilterSheet({required this.initialState});
+
+  @override
+  State<_BookshelfFilterSheet> createState() => _BookshelfFilterSheetState();
+}
+
+class _BookshelfFilterSheetState extends State<_BookshelfFilterSheet> {
+  late bool _showFolders;
+  late bool _showBooks;
+  late _BookshelfSort _sort;
+
+  @override
+  void initState() {
+    super.initState();
+    _showFolders = widget.initialState.showFolders;
+    _showBooks = widget.initialState.showBooks;
+    _sort = widget.initialState.sort;
+  }
+
+  void _submit() {
+    Navigator.of(context).pop(
+      _BookshelfFilterState(
+        showFolders: _showFolders,
+        showBooks: _showBooks,
+        sort: _sort,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: ListView(
+        shrinkWrap: true,
+        padding: _BookshelfStyle.filterSheetPadding,
+        children: [
+          Padding(
+            padding: _BookshelfStyle.filterTitlePadding,
+            child: Text(
+              '筛选',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+          ),
+          SwitchListTile(
+            title: const Text('显示文件夹'),
+            value: _showFolders,
+            onChanged: (value) {
+              setState(() {
+                _showFolders = value;
+              });
+            },
+          ),
+          SwitchListTile(
+            title: const Text('显示漫画'),
+            value: _showBooks,
+            onChanged: (value) {
+              setState(() {
+                _showBooks = value;
+              });
+            },
+          ),
+          const Divider(height: 1),
+          RadioGroup<_BookshelfSort>(
+            groupValue: _sort,
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() {
+                _sort = value;
+              });
+            },
+            child: const Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                RadioListTile<_BookshelfSort>(
+                  title: Text('最近更新'),
+                  value: _BookshelfSort.updatedDesc,
+                ),
+                RadioListTile<_BookshelfSort>(
+                  title: Text('标题排序'),
+                  value: _BookshelfSort.titleAsc,
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: _BookshelfStyle.filterButtonPadding,
+            child: FilledButton(onPressed: _submit, child: const Text('完成')),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _BookshelfCover extends StatelessWidget {
   final String url;
 
@@ -517,10 +836,10 @@ class _BookshelfCover extends StatelessWidget {
   Widget build(BuildContext context) {
     final resolvedUrl = url.trim();
     return ClipRRect(
-      borderRadius: BorderRadius.circular(4),
+      borderRadius: BorderRadius.circular(_BookshelfStyle.coverRadius),
       child: SizedBox(
-        width: 44,
-        height: 60,
+        width: _BookshelfStyle.coverWidth,
+        height: _BookshelfStyle.coverHeight,
         child: resolvedUrl.isEmpty
             ? _buildPlaceholder(context)
             : Image.network(
@@ -563,17 +882,17 @@ class _BookshelfMessage extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           if (iconText == null)
-            Icon(icon, size: 64, color: color)
+            Icon(icon, size: _BookshelfStyle.messageIconSize, color: color)
           else
             Text(
               iconText!,
               style: TextStyle(
                 color: color,
-                fontSize: 42,
+                fontSize: _BookshelfStyle.messageEmojiSize,
                 fontWeight: FontWeight.w600,
               ),
             ),
-          const SizedBox(height: 16),
+          const SizedBox(height: _BookshelfStyle.messageGap),
           Text(text, style: TextStyle(color: color)),
         ],
       ),

@@ -5,7 +5,22 @@ import 'tabs/discover_tab.dart';
 import 'tabs/history_tab.dart';
 import 'tabs/more_tab.dart';
 
-// 主页面 - 底部导航容器
+class _BottomTabsStyle {
+  static const double barHeight = 72;
+  static const double iconContainerWidth = 54;
+  static const double iconContainerHeight = 32;
+  static const double iconSize = 24;
+  static const double iconRadius = 18;
+  static const double iconTextGap = 8;
+  static const double labelFontSize = 14;
+
+  static const EdgeInsets tabPadding = EdgeInsets.only(top: 7, bottom: 5);
+  static const EdgeInsets safeAreaMinimum = EdgeInsets.only(bottom: 10);
+
+  static const Duration iconSwitchDuration = Duration(milliseconds: 220);
+  static const Duration labelSwitchDuration = Duration(milliseconds: 180);
+}
+
 class MainPage extends StatefulWidget {
   const MainPage({super.key});
 
@@ -15,7 +30,38 @@ class MainPage extends StatefulWidget {
 
 class _MainPageState extends State<MainPage> {
   int _currentIndex = 0;
+  // TODO: SHOULD REFACTOR
   int _historyRefreshVersion = 0;
+
+  static const _tabs = [
+    _BottomTabItem(
+      icon: Icons.collections_bookmark_outlined,
+      selectedIcon: Icons.collections_bookmark,
+      label: '书架',
+    ),
+    _BottomTabItem(
+      icon: Icons.explore_outlined,
+      selectedIcon: Icons.explore,
+      label: '发现',
+    ),
+    _BottomTabItem(
+      icon: Icons.history_outlined,
+      selectedIcon: Icons.history,
+      label: '历史',
+    ),
+    _BottomTabItem(
+      icon: Icons.download_outlined,
+      selectedIcon: Icons.download,
+      label: '下载',
+    ),
+    _BottomTabItem(
+      icon: Icons.more_horiz_outlined,
+      selectedIcon: Icons.more_horiz,
+      label: '更多',
+    ),
+  ];
+
+  static const int _historyTabIndex = 2;
 
   List<Widget> _buildTabs() {
     return [
@@ -27,47 +73,23 @@ class _MainPageState extends State<MainPage> {
     ];
   }
 
+  void _handleTabSelected(int index) {
+    setState(() {
+      _currentIndex = index;
+      if (index == _historyTabIndex) {
+        _historyRefreshVersion += 1;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: IndexedStack(index: _currentIndex, children: _buildTabs()),
       bottomNavigationBar: _KomixBottomTabs(
         currentIndex: _currentIndex,
-        onSelected: (index) {
-          setState(() {
-            _currentIndex = index;
-            if (index == 2) {
-              _historyRefreshVersion += 1;
-            }
-          });
-        },
-        tabs: const [
-          _BottomTabItem(
-            icon: Icons.collections_bookmark_outlined,
-            selectedIcon: Icons.collections_bookmark,
-            label: '书架',
-          ),
-          _BottomTabItem(
-            icon: Icons.explore_outlined,
-            selectedIcon: Icons.explore,
-            label: '发现',
-          ),
-          _BottomTabItem(
-            icon: Icons.history_outlined,
-            selectedIcon: Icons.history,
-            label: '历史',
-          ),
-          _BottomTabItem(
-            icon: Icons.download_outlined,
-            selectedIcon: Icons.download,
-            label: '下载',
-          ),
-          _BottomTabItem(
-            icon: Icons.more_horiz_outlined,
-            selectedIcon: Icons.more_horiz,
-            label: '更多',
-          ),
-        ],
+        onSelected: _handleTabSelected,
+        tabs: _tabs,
       ),
     );
   }
@@ -103,9 +125,9 @@ class _KomixBottomTabs extends StatelessWidget {
       ),
       child: SafeArea(
         top: false,
-        minimum: const EdgeInsets.only(bottom: 10),
+        minimum: _BottomTabsStyle.safeAreaMinimum,
         child: SizedBox(
-          height: 70,
+          height: _BottomTabsStyle.barHeight,
           child: Row(
             children: [
               for (var index = 0; index < tabs.length; index += 1)
@@ -142,12 +164,22 @@ class _BottomTab extends StatelessWidget {
     final labelColor = selected
         ? colorScheme.primary
         : colorScheme.onSurfaceVariant;
-    final textStyle = theme.textTheme.labelMedium?.copyWith(
+    final fontWeight = selected ? FontWeight.w600 : FontWeight.w500;
+
+    final fallbackTextStyle = TextStyle(
       color: labelColor,
-      fontSize: 14,
-      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+      fontSize: _BottomTabsStyle.labelFontSize,
+      fontWeight: fontWeight,
       height: 1.1,
     );
+    final textStyle =
+        theme.textTheme.labelMedium?.copyWith(
+          color: labelColor,
+          fontSize: _BottomTabsStyle.labelFontSize,
+          fontWeight: fontWeight,
+          height: 1.1,
+        ) ??
+        fallbackTextStyle;
 
     return Semantics(
       button: true,
@@ -157,7 +189,7 @@ class _BottomTab extends StatelessWidget {
         onTap: onTap,
         behavior: HitTestBehavior.opaque,
         child: Padding(
-          padding: const EdgeInsets.only(top: 7, bottom: 5),
+          padding: _BottomTabsStyle.tabPadding,
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
@@ -167,18 +199,11 @@ class _BottomTab extends StatelessWidget {
                 selectedIcon: item.selectedIcon,
                 selected: selected,
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: _BottomTabsStyle.iconTextGap),
               AnimatedDefaultTextStyle(
-                duration: const Duration(milliseconds: 180),
+                duration: _BottomTabsStyle.labelSwitchDuration,
                 curve: Curves.easeOutCubic,
-                style:
-                    textStyle ??
-                    TextStyle(
-                      color: labelColor,
-                      fontSize: 14,
-                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                      height: 1.1,
-                    ),
+                style: textStyle,
                 child: Text(
                   item.label,
                   maxLines: 1,
@@ -222,17 +247,17 @@ class _AnimatedDestinationIcon extends StatelessWidget {
     final activeIcon = selected ? selectedIcon : icon;
 
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
+      duration: _BottomTabsStyle.iconSwitchDuration,
       curve: Curves.easeOutCubic,
-      width: 54,
-      height: 32,
+      width: _BottomTabsStyle.iconContainerWidth,
+      height: _BottomTabsStyle.iconContainerHeight,
       decoration: BoxDecoration(
         color: selected ? colorScheme.primary : Colors.transparent,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(_BottomTabsStyle.iconRadius),
       ),
       alignment: Alignment.center,
       child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 220),
+        duration: _BottomTabsStyle.iconSwitchDuration,
         switchInCurve: Curves.easeOutBack,
         switchOutCurve: Curves.easeInCubic,
         transitionBuilder: (child, animation) {
@@ -245,7 +270,7 @@ class _AnimatedDestinationIcon extends StatelessWidget {
         child: Icon(
           activeIcon,
           key: ValueKey<IconData>(activeIcon),
-          size: 24,
+          size: _BottomTabsStyle.iconSize,
           color: selected
               ? colorScheme.onPrimary
               : colorScheme.onSurfaceVariant,

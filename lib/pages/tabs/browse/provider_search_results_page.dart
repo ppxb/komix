@@ -438,7 +438,7 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
         textInputAction: TextInputAction.search,
         style: const TextStyle(fontSize: 14),
         decoration: InputDecoration(
-          hintText: '在${_providerName}中搜索...',
+          hintText: '在$_providerName中搜索...',
           isDense: true,
           filled: true,
           fillColor: colorScheme.surfaceContainerHighest,
