@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../models/comic.dart';
+import '../../../providers/jm_provider.dart';
 import '../../../providers/provider_registry.dart';
 import '../../../services/search_aggregator.dart';
 import '../../comic_detail_page.dart';
@@ -34,10 +35,19 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
   bool _isSearching = false;
   bool _isLoadingMore = false;
   _ProviderSearchFilters _filters = const _ProviderSearchFilters();
+  _JmBrowseFilter _jmFilter = const _JmBrowseFilter();
 
   String get _providerName =>
       _providerRegistry.getProvider(widget.providerId)?.name ??
       widget.providerId;
+
+  bool get _supportsJmFilters => widget.providerId == JmProvider.providerId;
+
+  bool get _isFilterActive => _supportsJmFilters
+      ? _jmFilter.mode != _JmBrowseMode.search
+      : !_filters.isEmpty;
+
+  String get _requestKey => _buildRequestKey();
 
   bool get _canRequestMore =>
       !_isSearching &&
@@ -46,6 +56,10 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
           (_result.total > 0 && _result.items.length < _result.total));
 
   List<Comic> get _filteredItems {
+    if (_supportsJmFilters) {
+      return _result.items;
+    }
+
     final titleFilter = _filters.title.trim().toLowerCase();
     final metaFilter = _filters.meta.trim().toLowerCase();
     if (titleFilter.isEmpty && metaFilter.isEmpty) {
@@ -99,23 +113,89 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
     }
   }
 
+  String _buildRequestKey({_JmBrowseFilter? jmFilter, String? keyword}) {
+    final resolvedKeyword = keyword ?? _keyword;
+    if (!_supportsJmFilters) {
+      return 'search|$resolvedKeyword';
+    }
+
+    final resolvedFilter = jmFilter ?? _jmFilter;
+    return [
+      resolvedFilter.mode.name,
+      resolvedKeyword,
+      resolvedFilter.category.value,
+      resolvedFilter.order.value,
+    ].join('|');
+  }
+
+  Future<SearchResult?> _requestPage(
+    int page, {
+    _JmBrowseFilter? jmFilter,
+    String? keyword,
+  }) async {
+    final resolvedKeyword = keyword ?? _keyword;
+    final resolvedFilter = jmFilter ?? _jmFilter;
+
+    if (!_supportsJmFilters || resolvedFilter.mode == _JmBrowseMode.search) {
+      if (resolvedKeyword.trim().isEmpty) {
+        return null;
+      }
+      return _searchAggregator.searchFromProvider(
+        widget.providerId,
+        resolvedKeyword,
+        page,
+      );
+    }
+
+    final provider = _providerRegistry.getProvider(widget.providerId);
+    if (provider == null) {
+      return null;
+    }
+
+    try {
+      switch (resolvedFilter.mode) {
+        case _JmBrowseMode.search:
+          return null;
+        case _JmBrowseMode.latest:
+          return await provider.getLatest(page);
+        case _JmBrowseMode.ranking:
+          return await provider.getRanking(
+            category: resolvedFilter.category.value,
+            order: resolvedFilter.order.value,
+            page: page,
+          );
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _search(String keyword) async {
     final trimmedKeyword = keyword.trim();
     if (trimmedKeyword.isEmpty || _isSearching) return;
+
+    final nextJmFilter = _supportsJmFilters
+        ? _jmFilter.copyWith(mode: _JmBrowseMode.search)
+        : _jmFilter;
+    final requestKey = _buildRequestKey(
+      jmFilter: nextJmFilter,
+      keyword: trimmedKeyword,
+    );
 
     FocusScope.of(context).unfocus();
     setState(() {
       _isSearching = true;
       _keyword = trimmedKeyword;
       _filters = const _ProviderSearchFilters();
+      _jmFilter = nextJmFilter;
     });
 
-    final result = await _searchAggregator.searchFromProvider(
-      widget.providerId,
-      trimmedKeyword,
+    final result = await _requestPage(
       1,
+      keyword: trimmedKeyword,
+      jmFilter: nextJmFilter,
     );
-    if (!mounted) return;
+    if (!mounted || requestKey != _requestKey) return;
 
     setState(() {
       _isSearching = false;
@@ -135,14 +215,11 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
 
   Future<void> _refresh() async {
     final keyword = _keyword;
-    if (keyword.trim().isEmpty) return;
+    if (!_supportsJmFilters && keyword.trim().isEmpty) return;
 
-    final result = await _searchAggregator.searchFromProvider(
-      widget.providerId,
-      keyword,
-      1,
-    );
-    if (!mounted) return;
+    final requestKey = _requestKey;
+    final result = await _requestPage(1);
+    if (!mounted || requestKey != _requestKey) return;
 
     if (result == null) {
       ScaffoldMessenger.of(
@@ -159,7 +236,7 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
   Future<void> _loadMore() async {
     if (!_canRequestMore) return;
 
-    final keyword = _keyword;
+    final requestKey = _requestKey;
     final current = _result;
     setState(() {
       _isLoadingMore = true;
@@ -167,20 +244,16 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
 
     SearchResult? result;
     try {
-      result = await _searchAggregator.searchFromProvider(
-        widget.providerId,
-        keyword,
-        current.page + 1,
-      );
+      result = await _requestPage(current.page + 1);
     } finally {
-      if (mounted && keyword == _keyword) {
+      if (mounted && requestKey == _requestKey) {
         setState(() {
           _isLoadingMore = false;
         });
       }
     }
 
-    if (!mounted || keyword != _keyword) return;
+    if (!mounted || requestKey != _requestKey) return;
 
     if (result == null) {
       ScaffoldMessenger.of(
@@ -209,6 +282,21 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
   }
 
   Future<void> _showFilterSheet() async {
+    if (_supportsJmFilters) {
+      final filters = await showModalBottomSheet<_JmBrowseFilter>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (context) {
+          return _JmFilterSheet(initialFilter: _jmFilter);
+        },
+      );
+      if (!mounted || filters == null) return;
+
+      await _applyJmFilter(filters);
+      return;
+    }
+
     final filters = await showModalBottomSheet<_ProviderSearchFilters>(
       context: context,
       isScrollControlled: true,
@@ -224,6 +312,59 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
     });
   }
 
+  Future<void> _applyJmFilter(_JmBrowseFilter filter) async {
+    final keyword = filter.mode == _JmBrowseMode.search
+        ? _searchController.text.trim()
+        : '';
+    if (filter.mode == _JmBrowseMode.search && keyword.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请输入关键词')));
+      return;
+    }
+
+    final previousKeyword = _keyword;
+    final previousFilter = _jmFilter;
+    final previousSearchText = _searchController.text;
+    final requestKey = _buildRequestKey(jmFilter: filter, keyword: keyword);
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _isSearching = true;
+      _keyword = keyword;
+      _jmFilter = filter;
+      _filters = const _ProviderSearchFilters();
+    });
+    if (filter.mode != _JmBrowseMode.search) {
+      _searchController.clear();
+    }
+
+    final result = await _requestPage(1, jmFilter: filter, keyword: keyword);
+    if (!mounted || requestKey != _requestKey) return;
+
+    setState(() {
+      _isSearching = false;
+      if (result != null) {
+        _result = result;
+      } else {
+        _keyword = previousKeyword;
+        _jmFilter = previousFilter;
+      }
+    });
+    if (result == null) {
+      _searchController.text = previousSearchText;
+    }
+
+    if (result != null) {
+      _jumpResultsToTop();
+    }
+
+    if (result == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('加载失败')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -234,7 +375,7 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
         actions: [
           IconButton(
             tooltip: '筛选',
-            color: _filters.isEmpty ? null : theme.colorScheme.primary,
+            color: _isFilterActive ? theme.colorScheme.primary : null,
             icon: const Icon(Icons.tune),
             onPressed: _showFilterSheet,
           ),
@@ -243,7 +384,7 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
       body: Column(
         children: [
           _buildSearchBar(),
-          if (!_filters.isEmpty) _buildFilterSummary(),
+          if (_isFilterActive) _buildFilterSummary(),
           Expanded(child: _buildResults()),
         ],
       ),
@@ -304,6 +445,10 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
   }
 
   Widget _buildFilterSummary() {
+    if (_supportsJmFilters) {
+      return _buildJmFilterSummary();
+    }
+
     final chips = <Widget>[
       if (_filters.title.trim().isNotEmpty)
         InputChip(
@@ -327,6 +472,27 @@ class _ProviderSearchResultsPageState extends State<ProviderSearchResultsPage> {
 
     return SizedBox(
       height: 44,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        scrollDirection: Axis.horizontal,
+        itemCount: chips.length,
+        separatorBuilder: (context, index) => const SizedBox(width: 8),
+        itemBuilder: (context, index) => chips[index],
+      ),
+    );
+  }
+
+  Widget _buildJmFilterSummary() {
+    final chips = <Widget>[
+      Chip(label: Text(_jmFilter.mode.label)),
+      if (_jmFilter.mode == _JmBrowseMode.ranking) ...[
+        Chip(label: Text(_jmFilter.category.label)),
+        Chip(label: Text(_jmFilter.order.label)),
+      ],
+    ];
+
+    return SizedBox(
+      height: 40,
       child: ListView.separated(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         scrollDirection: Axis.horizontal,
@@ -474,6 +640,243 @@ class _ProviderSearchFilters {
     return _ProviderSearchFilters(
       title: title ?? this.title,
       meta: meta ?? this.meta,
+    );
+  }
+}
+
+enum _JmBrowseMode { search, latest, ranking }
+
+extension _JmBrowseModeLabel on _JmBrowseMode {
+  String get label {
+    switch (this) {
+      case _JmBrowseMode.search:
+        return '搜索';
+      case _JmBrowseMode.latest:
+        return '最新';
+      case _JmBrowseMode.ranking:
+        return '排行榜';
+    }
+  }
+
+  IconData get icon {
+    switch (this) {
+      case _JmBrowseMode.search:
+        return Icons.search;
+      case _JmBrowseMode.latest:
+        return Icons.update;
+      case _JmBrowseMode.ranking:
+        return Icons.leaderboard_outlined;
+    }
+  }
+}
+
+class _JmRankingOption {
+  final String label;
+  final String value;
+
+  const _JmRankingOption(this.label, this.value);
+}
+
+const _defaultJmRankingCategory = _JmRankingOption('最新a漫', '0');
+const _defaultJmRankingOrder = _JmRankingOption('最新', 'new');
+
+const _jmRankingCategories = <_JmRankingOption>[
+  _defaultJmRankingCategory,
+  _JmRankingOption('同人', 'doujin'),
+  _JmRankingOption('同人 / 汉化', 'doujin_chinese'),
+  _JmRankingOption('同人 / 日语', 'doujin_japanese'),
+  _JmRankingOption('同人 / CG图集', 'doujin_CG'),
+  _JmRankingOption('单本', 'single'),
+  _JmRankingOption('单本 / 汉化', 'single_chinese'),
+  _JmRankingOption('单本 / 日语', 'single_japanese'),
+  _JmRankingOption('单本 / 青年漫', 'single_youth'),
+  _JmRankingOption('短篇', 'short'),
+  _JmRankingOption('短篇 / 汉化', 'short_chinese'),
+  _JmRankingOption('短篇 / 日语', 'short_japanese'),
+  _JmRankingOption('其他类', 'another'),
+  _JmRankingOption('其他类 / 其他漫画', 'another_other'),
+  _JmRankingOption('其他类 / 3D', 'another_3d'),
+  _JmRankingOption('其他类 / 角色扮演', 'another_cosplay'),
+  _JmRankingOption('韩漫', 'hanman'),
+  _JmRankingOption('韩漫 / 汉化', 'hanman_chinese'),
+  _JmRankingOption('English Manga', 'meiman'),
+  _JmRankingOption('English Manga / IRODORI', 'meiman_irodori'),
+  _JmRankingOption('English Manga / FAKKU', 'meiman_fakku'),
+  _JmRankingOption('English Manga / 18scan', 'meiman_18scan'),
+  _JmRankingOption('English Manga / Manhwa', 'meiman_manhwa'),
+  _JmRankingOption('English Manga / Comic', 'meiman_comic'),
+  _JmRankingOption('English Manga / Other', 'meiman_other'),
+  _JmRankingOption('Cosplay', 'another_cosplay'),
+  _JmRankingOption('3D', '3D'),
+  _JmRankingOption('禁漫汉化组', '禁漫汉化组'),
+];
+
+const _jmRankingOrders = <_JmRankingOption>[
+  _defaultJmRankingOrder,
+  _JmRankingOption('最多点赞', 'tf'),
+  _JmRankingOption('总排行', 'mv'),
+  _JmRankingOption('月排行', 'mv_m'),
+  _JmRankingOption('周排行', 'mv_w'),
+  _JmRankingOption('日排行', 'mv_t'),
+];
+
+class _JmBrowseFilter {
+  final _JmBrowseMode mode;
+  final _JmRankingOption category;
+  final _JmRankingOption order;
+
+  const _JmBrowseFilter({
+    this.mode = _JmBrowseMode.search,
+    this.category = _defaultJmRankingCategory,
+    this.order = _defaultJmRankingOrder,
+  });
+
+  _JmBrowseFilter copyWith({
+    _JmBrowseMode? mode,
+    _JmRankingOption? category,
+    _JmRankingOption? order,
+  }) {
+    return _JmBrowseFilter(
+      mode: mode ?? this.mode,
+      category: category ?? this.category,
+      order: order ?? this.order,
+    );
+  }
+}
+
+class _JmFilterSheet extends StatefulWidget {
+  final _JmBrowseFilter initialFilter;
+
+  const _JmFilterSheet({required this.initialFilter});
+
+  @override
+  State<_JmFilterSheet> createState() => _JmFilterSheetState();
+}
+
+class _JmFilterSheetState extends State<_JmFilterSheet> {
+  late _JmBrowseFilter _filter;
+
+  @override
+  void initState() {
+    super.initState();
+    _filter = widget.initialFilter;
+  }
+
+  void _apply() {
+    Navigator.of(context).pop(_filter);
+  }
+
+  void _reset() {
+    setState(() {
+      _filter = const _JmBrowseFilter(mode: _JmBrowseMode.ranking);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(16, 0, 16, 16 + bottomInset),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '筛选',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              '模式',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _JmBrowseMode.values.map((mode) {
+                return ChoiceChip(
+                  avatar: Icon(mode.icon, size: 18),
+                  label: Text(mode.label),
+                  selected: _filter.mode == mode,
+                  onSelected: (selected) {
+                    if (!selected) return;
+                    setState(() {
+                      _filter = _filter.copyWith(mode: mode);
+                    });
+                  },
+                );
+              }).toList(growable: false),
+            ),
+            if (_filter.mode == _JmBrowseMode.ranking) ...[
+              const SizedBox(height: 16),
+              const Text(
+                '分类',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _jmRankingCategories.map((category) {
+                  return ChoiceChip(
+                    label: Text(category.label),
+                    selected: _filter.category.value == category.value,
+                    onSelected: (selected) {
+                      if (!selected) return;
+                      setState(() {
+                        _filter = _filter.copyWith(category: category);
+                      });
+                    },
+                  );
+                }).toList(growable: false),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                '排序',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _jmRankingOrders.map((order) {
+                  return ChoiceChip(
+                    label: Text(order.label),
+                    selected: _filter.order.value == order.value,
+                    onSelected: (selected) {
+                      if (!selected) return;
+                      setState(() {
+                        _filter = _filter.copyWith(order: order);
+                      });
+                    },
+                  );
+                }).toList(growable: false),
+              ),
+            ],
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _reset,
+                    child: const Text('重置'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: _apply,
+                    child: const Text('应用'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -7,7 +7,8 @@ import 'base_provider.dart';
 
 /// 禁漫天堂内置数据源。
 class JmProvider extends BaseProvider {
-  static const String _id = 'bf99008d-010b-4f17-ac7c-61a9b57dc3d9';
+  static const String providerId = 'bf99008d-010b-4f17-ac7c-61a9b57dc3d9';
+  static const String _id = providerId;
   static const String _name = '禁漫天堂';
   static const String _iconUrl = 'https://example.com/jm_icon.png';
 
