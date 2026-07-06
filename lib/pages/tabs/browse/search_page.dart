@@ -3,6 +3,7 @@ import '../../../services/search_aggregator.dart';
 import '../../../models/comic.dart';
 import '../../../providers/provider_registry.dart';
 import '../../comic_detail_page.dart';
+import 'provider_search_results_page.dart';
 
 /// 搜索页 - 聚合搜索所有内置源
 class SearchPage extends StatefulWidget {
@@ -13,43 +14,53 @@ class SearchPage extends StatefulWidget {
 }
 
 class _SearchPageState extends State<SearchPage> {
+  static const int _previewLimit = 8;
+
   final TextEditingController _searchController = TextEditingController();
   final SearchAggregator _searchAggregator = SearchAggregator();
   final ProviderRegistry _providerRegistry = ProviderRegistry();
 
   Map<String, SearchResult>? _searchResults;
-  final Map<String, int> _providerPages = {};
-  final Set<String> _loadingMoreProviders = {};
   bool _isLoading = false;
   String _currentKeyword = '';
 
   @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(_onSearchTextChanged);
+  }
+
+  @override
   void dispose() {
+    _searchController.removeListener(_onSearchTextChanged);
     _searchController.dispose();
     super.dispose();
   }
 
+  void _onSearchTextChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   Future<void> _performSearch(String keyword) async {
-    if (keyword.trim().isEmpty) return;
+    final trimmedKeyword = keyword.trim();
+    if (trimmedKeyword.isEmpty) return;
 
     setState(() {
       _isLoading = true;
-      _currentKeyword = keyword;
+      _currentKeyword = trimmedKeyword;
+      _searchResults = null;
     });
 
     try {
-      final results = await _searchAggregator.aggregateSearch(keyword, 1);
+      final results = await _searchAggregator.aggregateSearch(
+        trimmedKeyword,
+        1,
+      );
       if (!mounted) return;
       setState(() {
         _searchResults = results;
-        _providerPages
-          ..clear()
-          ..addEntries(
-            results.entries.map(
-              (entry) => MapEntry(entry.key, entry.value.page),
-            ),
-          );
-        _loadingMoreProviders.clear();
         _isLoading = false;
       });
     } catch (e) {
@@ -85,8 +96,6 @@ class _SearchPageState extends State<SearchPage> {
                         setState(() {
                           _searchResults = null;
                           _currentKeyword = '';
-                          _providerPages.clear();
-                          _loadingMoreProviders.clear();
                         });
                       },
                     )
@@ -126,14 +135,33 @@ class _SearchPageState extends State<SearchPage> {
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _searchResults!.length,
-      itemBuilder: (context, index) {
-        final providerId = _searchResults!.keys.elementAt(index);
-        final result = _searchResults![providerId]!;
+    final entries = _searchResults!.entries
+        .where((entry) => entry.value.items.isNotEmpty)
+        .toList(growable: false);
 
-        return _buildProviderSection(providerId, result);
+    if (entries.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.search_off, size: 64, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text(
+              '未找到相关结果',
+              style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: entries.length,
+      separatorBuilder: (context, index) => const SizedBox(height: 24),
+      itemBuilder: (context, index) {
+        final entry = entries[index];
+        return _buildProviderSection(entry.key, entry.value);
       },
     );
   }
@@ -141,176 +169,108 @@ class _SearchPageState extends State<SearchPage> {
   Widget _buildProviderSection(String providerId, SearchResult result) {
     final providerName =
         _providerRegistry.getProvider(providerId)?.name ?? providerId;
-    final loadedCount = result.items.length;
-    final totalCount = result.total;
-    final isLoadingMore = _loadingMoreProviders.contains(providerId);
-    final canLoadMore =
-        !isLoadingMore &&
-        (result.hasMore || (totalCount > 0 && loadedCount < totalCount));
+    final previewItems = result.items.take(_previewLimit).toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 数据源标题
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Text(
-                  providerName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                providerName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
-              const SizedBox(width: 12),
-              Text(
-                '$totalCount 个结果',
-                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-              ),
-            ],
-          ),
-        ),
-
-        // 漫画网格
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
-            childAspectRatio: 0.6,
-            crossAxisSpacing: 8,
-            mainAxisSpacing: 8,
-          ),
-          itemCount: result.items.length,
-          itemBuilder: (context, index) {
-            final comic = result.items[index];
-            return _buildComicCard(providerId, comic);
-          },
-        ),
-
-        if (canLoadMore || isLoadingMore)
-          Padding(
-            padding: const EdgeInsets.only(top: 16),
-            child: Center(
-              child: FilledButton.icon(
-                onPressed: canLoadMore ? () => _loadMore(providerId) : null,
-                icon: isLoadingMore
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.expand_more),
-                label: Text(isLoadingMore ? '加载中' : '加载更多'),
-              ),
             ),
+            const SizedBox(width: 12),
+            IconButton(
+              tooltip: '查看$providerName',
+              icon: const Icon(Icons.chevron_right),
+              onPressed: () => _openProviderResults(providerId, result),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 224,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: previewItems.length,
+            separatorBuilder: (context, index) => const SizedBox(width: 10),
+            itemBuilder: (context, index) {
+              final comic = previewItems[index];
+              return _buildComicCard(providerId, comic);
+            },
           ),
-
-        const SizedBox(height: 24),
+        ),
       ],
     );
   }
 
-  Future<void> _loadMore(String providerId) async {
-    final currentResults = _searchResults;
-    final current = currentResults?[providerId];
-    final keyword = _currentKeyword;
-    if (current == null || keyword.trim().isEmpty) return;
-    if (_loadingMoreProviders.contains(providerId)) return;
-
-    final nextPage = (_providerPages[providerId] ?? current.page) + 1;
-    setState(() {
-      _loadingMoreProviders.add(providerId);
-    });
-
-    SearchResult? result;
-    try {
-      result = await _searchAggregator.searchFromProvider(
-        providerId,
-        keyword,
-        nextPage,
-      );
-    } finally {
-      if (mounted && keyword == _currentKeyword) {
-        setState(() {
-          _loadingMoreProviders.remove(providerId);
-        });
-      }
-    }
-
-    if (!mounted || keyword != _currentKeyword) return;
-
-    setState(() {
-      if (result == null) {
-        return;
-      }
-
-      _providerPages[providerId] = result.page;
-      _searchResults?[providerId] = SearchResult(
-        items: [...current.items, ...result.items],
-        total: result.total,
-        page: result.page,
-        hasMore: result.hasMore,
-      );
-    });
-
-    if (result == null && mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('加载更多失败')));
-    }
+  void _openProviderResults(String providerId, SearchResult result) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ProviderSearchResultsPage(
+          providerId: providerId,
+          initialKeyword: _currentKeyword,
+          initialResult: result,
+        ),
+      ),
+    );
   }
 
   Widget _buildComicCard(String providerId, Comic comic) {
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) =>
-                  ComicDetailPage(providerId: providerId, initialComic: comic),
-            ),
-          );
-        },
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 封面
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                color: Colors.grey[300],
-                child: Image.network(
-                  comic.coverUrl,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return const Center(child: Icon(Icons.broken_image));
-                  },
+    return SizedBox(
+      width: 128,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ComicDetailPage(
+                  providerId: providerId,
+                  initialComic: comic,
                 ),
               ),
-            ),
-
-            // 标题
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Text(
-                comic.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
+            );
+          },
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AspectRatio(
+                aspectRatio: 3 / 4,
+                child: Container(
+                  width: double.infinity,
+                  color: Colors.grey[300],
+                  child: Image.network(
+                    comic.coverUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return const Center(child: Icon(Icons.broken_image));
+                    },
+                  ),
                 ),
               ),
-            ),
-          ],
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text(
+                  comic.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
