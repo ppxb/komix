@@ -238,11 +238,16 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
             },
           ),
         )
-        .then((_) {
+        .then((_) async {
           if (!mounted) return;
           setState(() {
             _progressFuture = _loadProgress();
           });
+          await SystemChrome.setEnabledSystemUIMode(
+            SystemUiMode.manual,
+            overlays: [SystemUiOverlay.top, SystemUiOverlay.bottom],
+          );
+          if (!mounted) return;
           SystemChrome.setSystemUIOverlayStyle(returnSystemUiStyle);
         });
   }

@@ -75,6 +75,11 @@ class _HistoryTabState extends State<HistoryTab> {
 
     if (!mounted) return;
     final theme = Theme.of(context);
+    await SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: [SystemUiOverlay.top, SystemUiOverlay.bottom],
+    );
+    if (!mounted) return;
     SystemChrome.setSystemUIOverlayStyle(
       SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,

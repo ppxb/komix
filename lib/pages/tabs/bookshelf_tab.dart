@@ -18,7 +18,7 @@ class BookshelfTab extends StatefulWidget {
 
 class _BookshelfStyle {
   static const double searchHeight = 40;
-  static const double clearIconSize = 20;
+  static const double clearIconSize = 24;
   static const double coverWidth = 44;
   static const double coverHeight = 60;
   static const double coverRadius = 4;
@@ -211,11 +211,8 @@ class _BookshelfTabState extends State<BookshelfTab> {
     if (name == null || name == folder.name) return;
 
     await _performAndRefresh(
-      () => ComicFolderService.renameFolder(
-        path,
-        name,
-        ComicFolderType.favorite,
-      ),
+      () =>
+          ComicFolderService.renameFolder(path, name, ComicFolderType.favorite),
     );
   }
 
@@ -771,10 +768,7 @@ class _BookshelfFilterSheetState extends State<_BookshelfFilterSheet> {
         children: [
           Padding(
             padding: _BookshelfStyle.filterTitlePadding,
-            child: Text(
-              '筛选',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            child: Text('筛选', style: Theme.of(context).textTheme.titleMedium),
           ),
           SwitchListTile(
             title: const Text('显示文件夹'),
