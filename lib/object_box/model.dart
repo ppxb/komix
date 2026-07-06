@@ -1019,7 +1019,7 @@ class PluginInfo {
   }
 }
 
-/// 漫画文件夹/链接类型：收藏、历史、下载
+/// 漫画文件夹/链接类型：书架、历史、下载
 enum ComicFolderType { favorite, history, download }
 
 @Entity()

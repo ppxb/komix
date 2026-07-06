@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/bika_provider.dart';
 import '../../providers/provider_registry.dart';
-import '../downloads_page.dart';
 import '../system_settings_page.dart';
 
 /// 更多 Tab - 设置和其他功能
@@ -46,19 +45,6 @@ class MoreTab extends StatelessWidget {
                 subtitle: '阅读模式、翻页方向等',
                 onTap: () {
                   // TODO: 导航到阅读设置
-                },
-              ),
-              _buildListTile(
-                context,
-                icon: Icons.download_outlined,
-                title: '下载管理',
-                subtitle: '管理已下载的漫画',
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (context) => const DownloadsPage(),
-                    ),
-                  );
                 },
               ),
             ],

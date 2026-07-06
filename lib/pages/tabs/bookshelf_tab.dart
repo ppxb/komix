@@ -9,58 +9,58 @@ import '../../services/comic_link_service.dart';
 import '../../services/favorite_service.dart';
 import '../comic_detail_page.dart';
 
-class FavoriteTab extends StatefulWidget {
-  const FavoriteTab({super.key});
+class BookshelfTab extends StatefulWidget {
+  const BookshelfTab({super.key});
 
   @override
-  State<FavoriteTab> createState() => _FavoriteTabState();
+  State<BookshelfTab> createState() => _BookshelfTabState();
 }
 
-class _FavoriteTabState extends State<FavoriteTab> {
-  late Future<_FavoriteShelfData> _shelfFuture;
+class _BookshelfTabState extends State<BookshelfTab> {
+  late Future<_BookshelfData> _bookshelfFuture;
   String _currentPath = kComicFolderRootPath;
 
   @override
   void initState() {
     super.initState();
-    _shelfFuture = _loadShelf();
-    FavoriteService.instance.revision.addListener(_handleFavoritesChanged);
+    _bookshelfFuture = _loadBookshelf();
+    FavoriteService.instance.revision.addListener(_handleBookshelfChanged);
   }
 
   @override
   void dispose() {
-    FavoriteService.instance.revision.removeListener(_handleFavoritesChanged);
+    FavoriteService.instance.revision.removeListener(_handleBookshelfChanged);
     super.dispose();
   }
 
-  Future<_FavoriteShelfData> _loadShelf() async {
+  Future<_BookshelfData> _loadBookshelf() async {
     final folders = ComicFolderService.listChildFolders(
       _currentPath,
       ComicFolderType.favorite,
     );
-    final favorites = await FavoriteService.instance.getFavoritesInFolder(
+    final books = await FavoriteService.instance.getFavoritesInFolder(
       _currentPath,
     );
-    return _FavoriteShelfData(folders: folders, favorites: favorites);
+    return _BookshelfData(folders: folders, books: books);
   }
 
-  Future<void> _refreshShelf() {
-    final future = _loadShelf();
+  Future<void> _refreshBookshelf() {
+    final future = _loadBookshelf();
     setState(() {
-      _shelfFuture = future;
+      _bookshelfFuture = future;
     });
     return future.then<void>((_) {}, onError: (_) {});
   }
 
-  void _handleFavoritesChanged() {
+  void _handleBookshelfChanged() {
     if (!mounted) return;
-    unawaited(_refreshShelf());
+    unawaited(_refreshBookshelf());
   }
 
   void _openFolder(ComicFolder folder) {
     setState(() {
       _currentPath = ComicFolderService.folderPath(folder);
-      _shelfFuture = _loadShelf();
+      _bookshelfFuture = _loadBookshelf();
     });
   }
 
@@ -68,22 +68,22 @@ class _FavoriteTabState extends State<FavoriteTab> {
     if (_currentPath == kComicFolderRootPath) return;
     setState(() {
       _currentPath = _parentPath(_currentPath);
-      _shelfFuture = _loadShelf();
+      _bookshelfFuture = _loadBookshelf();
     });
   }
 
-  void _openFavorite(FavoriteComic favorite) {
-    final provider = ProviderRegistry().getProvider(favorite.providerId);
+  void _openBook(FavoriteComic book) {
+    final provider = ProviderRegistry().getProvider(book.providerId);
     if (provider == null) {
-      _showMessage('未找到数据源: ${favorite.providerId}');
+      _showMessage('未找到数据源: ${book.providerId}');
       return;
     }
 
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => ComicDetailPage(
-          providerId: favorite.providerId,
-          initialComic: favorite.toComic(),
+          providerId: book.providerId,
+          initialComic: book.toComic(),
         ),
       ),
     );
@@ -99,7 +99,7 @@ class _FavoriteTabState extends State<FavoriteTab> {
         name,
         ComicFolderType.favorite,
       );
-      await _refreshShelf();
+      await _refreshBookshelf();
     } catch (error) {
       if (!mounted) return;
       _showMessage(error.toString());
@@ -117,7 +117,7 @@ class _FavoriteTabState extends State<FavoriteTab> {
 
     try {
       ComicFolderService.renameFolder(path, name, ComicFolderType.favorite);
-      await _refreshShelf();
+      await _refreshBookshelf();
     } catch (error) {
       if (!mounted) return;
       _showMessage(error.toString());
@@ -132,33 +132,33 @@ class _FavoriteTabState extends State<FavoriteTab> {
     try {
       ComicLinkService.removeLinksInFolderTree(path, ComicFolderType.favorite);
       ComicFolderService.deleteFolder(path, ComicFolderType.favorite);
-      await _refreshShelf();
+      await _refreshBookshelf();
     } catch (error) {
       if (!mounted) return;
       _showMessage(error.toString());
     }
   }
 
-  Future<void> _moveFavorite(FavoriteComic favorite) async {
+  Future<void> _moveBook(FavoriteComic book) async {
     final targetPath = await _chooseTargetFolder();
     if (targetPath == null || targetPath == _currentPath) return;
 
     ComicLinkService.moveComic(
-      favorite.uniqueKey,
+      book.uniqueKey,
       _currentPath,
       targetPath,
       ComicFolderType.favorite,
     );
-    await _refreshShelf();
+    await _refreshBookshelf();
   }
 
-  Future<void> _removeFavorite(FavoriteComic favorite) async {
+  Future<void> _removeBook(FavoriteComic book) async {
     await FavoriteService.instance.removeFavorite(
-      providerId: favorite.providerId,
-      comicId: favorite.comicId,
+      providerId: book.providerId,
+      comicId: book.comicId,
     );
     if (!mounted) return;
-    _showMessage('已取消收藏');
+    _showMessage('已移出书架');
   }
 
   Future<String?> _promptFolderName({
@@ -208,7 +208,7 @@ class _FavoriteTabState extends State<FavoriteTab> {
       builder: (context) {
         return AlertDialog(
           title: const Text('删除文件夹'),
-          content: Text('删除 "$name" 后，其中仅存在于该文件夹的收藏也会被移除。'),
+          content: Text('删除 "$name" 后，其中仅存在于该文件夹的书架条目也会被移除。'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -231,7 +231,7 @@ class _FavoriteTabState extends State<FavoriteTab> {
       sortAscending: true,
     );
     final targets = <_FolderTarget>[
-      const _FolderTarget(path: kComicFolderRootPath, label: '根目录'),
+      const _FolderTarget(path: kComicFolderRootPath, label: '书架根目录'),
       ...folders.map((folder) {
         final path = ComicFolderService.folderPath(folder);
         return _FolderTarget(path: path, label: path);
@@ -279,9 +279,9 @@ class _FavoriteTabState extends State<FavoriteTab> {
   }
 
   String _titleForPath() {
-    if (_currentPath == kComicFolderRootPath) return '收藏';
+    if (_currentPath == kComicFolderRootPath) return '书架';
     final name = _currentPath.split('/').where((part) => part.isNotEmpty).last;
-    return name.isEmpty ? '收藏' : name;
+    return name.isEmpty ? '书架' : name;
   }
 
   String _parentPath(String path) {
@@ -314,10 +314,10 @@ class _FavoriteTabState extends State<FavoriteTab> {
           ),
         ],
       ),
-      body: FutureBuilder<_FavoriteShelfData>(
-        future: _shelfFuture,
+      body: FutureBuilder<_BookshelfData>(
+        future: _bookshelfFuture,
         builder: (context, snapshot) {
-          final data = snapshot.data ?? const _FavoriteShelfData.empty();
+          final data = snapshot.data ?? const _BookshelfData.empty();
 
           if (snapshot.connectionState == ConnectionState.waiting &&
               data.isEmpty) {
@@ -325,21 +325,18 @@ class _FavoriteTabState extends State<FavoriteTab> {
           }
 
           if (snapshot.hasError && data.isEmpty) {
-            return _FavoriteMessage(
+            return _BookshelfMessage(
               icon: Icons.error_outline,
               text: snapshot.error.toString(),
             );
           }
 
           if (data.isEmpty) {
-            return const _FavoriteMessage(
-              icon: Icons.favorite_outline,
-              text: '暂无收藏',
-            );
+            return _BookshelfMessage.textIcon(iconText: '(･o･;)', text: '书架为空');
           }
 
           return RefreshIndicator.adaptive(
-            onRefresh: _refreshShelf,
+            onRefresh: _refreshBookshelf,
             child: ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
               itemCount: data.itemCount,
@@ -347,7 +344,7 @@ class _FavoriteTabState extends State<FavoriteTab> {
               itemBuilder: (context, index) {
                 if (index < data.folders.length) {
                   final folder = data.folders[index];
-                  return _FavoriteFolderTile(
+                  return _BookshelfFolderTile(
                     folder: folder,
                     onOpen: () => _openFolder(folder),
                     onRename: () => _renameFolder(folder),
@@ -355,12 +352,12 @@ class _FavoriteTabState extends State<FavoriteTab> {
                   );
                 }
 
-                final favorite = data.favorites[index - data.folders.length];
-                return _FavoriteComicTile(
-                  favorite: favorite,
-                  onOpen: () => _openFavorite(favorite),
-                  onMove: () => _moveFavorite(favorite),
-                  onRemove: () => _removeFavorite(favorite),
+                final book = data.books[index - data.folders.length];
+                return _BookshelfBookTile(
+                  book: book,
+                  onOpen: () => _openBook(book),
+                  onMove: () => _moveBook(book),
+                  onRemove: () => _removeBook(book),
                 );
               },
             ),
@@ -371,17 +368,17 @@ class _FavoriteTabState extends State<FavoriteTab> {
   }
 }
 
-class _FavoriteShelfData {
+class _BookshelfData {
   final List<ComicFolder> folders;
-  final List<FavoriteComic> favorites;
+  final List<FavoriteComic> books;
 
-  const _FavoriteShelfData({required this.folders, required this.favorites});
+  const _BookshelfData({required this.folders, required this.books});
 
-  const _FavoriteShelfData.empty()
+  const _BookshelfData.empty()
     : folders = const <ComicFolder>[],
-      favorites = const <FavoriteComic>[];
+      books = const <FavoriteComic>[];
 
-  int get itemCount => folders.length + favorites.length;
+  int get itemCount => folders.length + books.length;
 
   bool get isEmpty => itemCount == 0;
 }
@@ -393,13 +390,13 @@ class _FolderTarget {
   const _FolderTarget({required this.path, required this.label});
 }
 
-class _FavoriteFolderTile extends StatelessWidget {
+class _BookshelfFolderTile extends StatelessWidget {
   final ComicFolder folder;
   final VoidCallback onOpen;
   final VoidCallback onRename;
   final VoidCallback onDelete;
 
-  const _FavoriteFolderTile({
+  const _BookshelfFolderTile({
     required this.folder,
     required this.onOpen,
     required this.onRename,
@@ -446,14 +443,14 @@ class _FavoriteFolderTile extends StatelessWidget {
   }
 }
 
-class _FavoriteComicTile extends StatelessWidget {
-  final FavoriteComic favorite;
+class _BookshelfBookTile extends StatelessWidget {
+  final FavoriteComic book;
   final VoidCallback onOpen;
   final VoidCallback onMove;
   final VoidCallback onRemove;
 
-  const _FavoriteComicTile({
-    required this.favorite,
+  const _BookshelfBookTile({
+    required this.book,
     required this.onOpen,
     required this.onMove,
     required this.onRemove,
@@ -462,23 +459,23 @@ class _FavoriteComicTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final providerName =
-        ProviderRegistry().getProvider(favorite.providerId)?.name ??
-        favorite.providerId;
-    final subtitle = favorite.creator.isEmpty
+        ProviderRegistry().getProvider(book.providerId)?.name ??
+        book.providerId;
+    final subtitle = book.creator.isEmpty
         ? providerName
-        : '$providerName · ${favorite.creator}';
+        : '$providerName · ${book.creator}';
 
     return ListTile(
-      leading: _FavoriteCover(url: favorite.coverUrl),
-      title: Text(favorite.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      leading: _BookshelfCover(url: book.coverUrl),
+      title: Text(book.title, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
-      trailing: PopupMenuButton<_FavoriteAction>(
+      trailing: PopupMenuButton<_BookshelfAction>(
         onSelected: (action) {
           switch (action) {
-            case _FavoriteAction.move:
+            case _BookshelfAction.move:
               onMove();
               return;
-            case _FavoriteAction.remove:
+            case _BookshelfAction.remove:
               onRemove();
               return;
           }
@@ -486,17 +483,17 @@ class _FavoriteComicTile extends StatelessWidget {
         itemBuilder: (context) {
           return const [
             PopupMenuItem(
-              value: _FavoriteAction.move,
+              value: _BookshelfAction.move,
               child: ListTile(
                 leading: Icon(Icons.drive_file_move_outlined),
                 title: Text('移动到'),
               ),
             ),
             PopupMenuItem(
-              value: _FavoriteAction.remove,
+              value: _BookshelfAction.remove,
               child: ListTile(
-                leading: Icon(Icons.favorite),
-                title: Text('取消收藏'),
+                leading: Icon(Icons.remove_circle_outline),
+                title: Text('移出书架'),
               ),
             ),
           ];
@@ -509,12 +506,12 @@ class _FavoriteComicTile extends StatelessWidget {
 
 enum _FolderAction { rename, delete }
 
-enum _FavoriteAction { move, remove }
+enum _BookshelfAction { move, remove }
 
-class _FavoriteCover extends StatelessWidget {
+class _BookshelfCover extends StatelessWidget {
   final String url;
 
-  const _FavoriteCover({required this.url});
+  const _BookshelfCover({required this.url});
 
   @override
   Widget build(BuildContext context) {
@@ -545,24 +542,39 @@ class _FavoriteCover extends StatelessWidget {
   }
 }
 
-class _FavoriteMessage extends StatelessWidget {
-  final IconData icon;
+class _BookshelfMessage extends StatelessWidget {
+  final IconData? icon;
+  final String? iconText;
   final String text;
 
-  const _FavoriteMessage({required this.icon, required this.text});
+  const _BookshelfMessage({required IconData this.icon, required this.text})
+    : iconText = null;
+
+  const _BookshelfMessage.textIcon({
+    required String this.iconText,
+    required this.text,
+  }) : icon = null;
 
   @override
   Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.outline;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, size: 64, color: Theme.of(context).colorScheme.outline),
+          if (iconText == null)
+            Icon(icon, size: 64, color: color)
+          else
+            Text(
+              iconText!,
+              style: TextStyle(
+                color: color,
+                fontSize: 42,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           const SizedBox(height: 16),
-          Text(
-            text,
-            style: TextStyle(color: Theme.of(context).colorScheme.outline),
-          ),
+          Text(text, style: TextStyle(color: color)),
         ],
       ),
     );

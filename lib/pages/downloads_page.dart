@@ -186,7 +186,7 @@ class _DownloadsPageState extends State<DownloadsPage> {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('下载管理'),
+          title: const Text('下载'),
           bottom: const TabBar(
             tabs: [
               Tab(text: '任务'),

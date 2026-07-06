@@ -145,7 +145,7 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
       setState(() {
         _isFavorite = favorite;
       });
-      _showPendingMessage(favorite ? '已添加收藏' : '已取消收藏');
+      _showPendingMessage(favorite ? '已加入书架' : '已移出书架');
     } catch (error) {
       if (!mounted) return;
       _showPendingMessage(error.toString());
@@ -367,9 +367,11 @@ class _ComicDetailPageState extends State<ComicDetailPage> {
                 enabled: !_isFavoriteLoading,
                 child: ListTile(
                   leading: Icon(
-                    _isFavorite ? Icons.favorite : Icons.favorite_border,
+                    _isFavorite
+                        ? Icons.auto_stories
+                        : Icons.auto_stories_outlined,
                   ),
-                  title: Text(_isFavorite ? '取消收藏' : '添加收藏'),
+                  title: Text(_isFavorite ? '移出书架' : '加入书架'),
                 ),
               ),
             ],

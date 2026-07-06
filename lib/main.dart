@@ -24,6 +24,31 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
+class _AppTheme {
+  static const double appBarHeight = 64;
+  static const String fontFamily = "Inter";
+
+  static ThemeData light(Color seedColor) => ThemeData(
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: seedColor,
+      brightness: Brightness.light,
+    ),
+    appBarTheme: const AppBarTheme(toolbarHeight: appBarHeight),
+    useMaterial3: true,
+    fontFamily: fontFamily,
+  );
+
+  static ThemeData dark(Color seedColor) => ThemeData(
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: seedColor,
+      brightness: Brightness.dark,
+    ),
+    appBarTheme: const AppBarTheme(toolbarHeight: appBarHeight),
+    useMaterial3: true,
+    fontFamily: fontFamily,
+  );
+}
+
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -38,24 +63,9 @@ class MyApp extends StatelessWidget {
         builder: (context, setting) {
           return MaterialApp(
             title: 'Komix',
-            debugShowCheckedModeBanner: false,
             themeMode: setting.themeMode,
-            theme: ThemeData(
-              colorScheme: ColorScheme.fromSeed(
-                seedColor: setting.seedColor,
-                brightness: Brightness.light,
-              ),
-              useMaterial3: true,
-              fontFamily: 'Inter',
-            ),
-            darkTheme: ThemeData(
-              colorScheme: ColorScheme.fromSeed(
-                seedColor: setting.seedColor,
-                brightness: Brightness.dark,
-              ),
-              useMaterial3: true,
-              fontFamily: 'Inter',
-            ),
+            theme: _AppTheme.light(setting.seedColor),
+            darkTheme: _AppTheme.dark(setting.seedColor),
             home: const MainPage(),
           );
         },

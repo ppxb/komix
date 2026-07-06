@@ -56,7 +56,8 @@ pub struct PageImage {
     pub url: String,
     pub path: String,
     pub original_name: String,
-    pub extern: Value,
+    #[serde(rename = "extern")]
+    pub r#extern: Value,
 }
 
 impl BikaClient {
@@ -254,7 +255,7 @@ impl BikaClient {
                     url,
                     path: sanitize_path(&path),
                     original_name,
-                    extern: json!({"pictureType": "page"}),
+                    r#extern: json!({"pictureType": "page"}),
                 });
             }
 
