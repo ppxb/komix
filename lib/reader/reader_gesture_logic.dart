@@ -1,5 +1,4 @@
 import 'package:flutter/widgets.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../config/global/global_setting.dart';
 import 'reader_action_controller.dart';
@@ -7,22 +6,20 @@ import 'reader_action_controller.dart';
 class ReaderGestureLogic {
   static void handleTap({
     required ReaderActionController actionController,
-    required PageController controller,
-    required BuildContext context,
+    required ReadSettingState readSetting,
+    required Size screenSize,
     required TapDownDetails details,
     required VoidCallback onToggleMenu,
     VoidCallback? onBeforePageTurn,
   }) {
-    final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
     if (readSetting.readMode == 0) {
       onToggleMenu();
       return;
     }
 
     final tapPosition = details.globalPosition;
-    final mediaQuery = MediaQuery.of(context);
-    final screenWidth = mediaQuery.size.width;
-    final screenHeight = mediaQuery.size.height;
+    final screenWidth = screenSize.width;
+    final screenHeight = screenSize.height;
     final thirdWidth = screenWidth / 3;
     final thirdHeight = screenHeight / 3;
     final inCenterControlArea =

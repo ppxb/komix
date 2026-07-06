@@ -362,15 +362,16 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   Future<void> _handleTap() async {
+    final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
+    final screenSize = MediaQuery.sizeOf(context);
     await Future<void>.delayed(Duration.zero);
     final details = _tapDownDetails;
     if (details == null || !_canUseContext) return;
-    final readSetting = context.read<GlobalSettingCubit>().state.readSetting;
 
     ReaderGestureLogic.handleTap(
       actionController: _actionController,
-      controller: _pageController,
-      context: context,
+      readSetting: readSetting,
+      screenSize: screenSize,
       details: details,
       onToggleMenu: readSetting.doubleTapOpenMenu
           ? () {
