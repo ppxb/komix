@@ -1,169 +1,84 @@
 # Komix
 
-一个跨平台的漫画阅读器，使用 Flutter + Rust 构建。
+Komix 是一个跨平台漫画阅读器，使用 Flutter + Rust 构建。项目方向是维护内置数据源 Provider：Flutter 负责 Provider 注册、UI、路由和模型映射，Rust 尽量承担源请求、签名、解密、解析和图片处理。
 
-## 项目架构
+## 项目方向
 
-### 技术栈
+- 使用内置 Provider 管理多漫画源，不引入 Breeze 的插件/QJS 插件系统。
+- Provider 请求逻辑优先放在 Rust，Flutter 侧保持源注册、聚合、页面和本地数据编排。
+- Reader、下载、收藏、历史等功能保持源无关，统一通过 `BaseProvider` 契约读取章节和图片。
+- Breeze 作为产品结构和下载架构参考，具体迁移时只搬适合 Komix 内置源架构的部分。
 
-- **Flutter**: UI 框架，跨平台支持（Android, iOS, Windows, Linux, macOS）
-- **Rust**: 核心业务逻辑（网络请求、数据解析、加密解密）
-- **Provider**: 状态管理
-- **flutter_rust_bridge**: Flutter 与 Rust 的 FFI 桥接（待配置）
+## 技术栈
 
-### 目录结构
+- Flutter: 跨平台 UI、状态管理、页面组织。
+- Rust: HTTP 请求、源签名/解密、响应解析、图片解码。
+- flutter_rust_bridge: Flutter 与 Rust 的 FFI 桥接。
+- ObjectBox: 收藏、历史、下载、设置等本地数据。
+- Provider / flutter_bloc: 应用状态和全局设置。
 
-```
+## 目录结构
+
+```text
 komix/
 ├── lib/
-│   ├── main.dart                    # 应用入口
-│   ├── models/                      # 数据模型
-│   │   └── comic.dart              # 漫画、章节等数据模型
-│   ├── providers/                   # 数据源层
-│   │   ├── base_provider.dart      # 数据源基类
-│   │   ├── jm_provider.dart        # 禁漫天堂数据源
-│   │   └── provider_registry.dart  # 数据源注册表
-│   ├── services/                    # 业务服务
-│   │   └── search_aggregator.dart  # 聚合搜索服务
-│   └── pages/                       # 页面
-│       ├── main_page.dart          # 主页（底部导航容器）
-│       └── tabs/                    # Tab 页面
-│           ├── browse/             # 浏览 Tab
-│           │   ├── browse_tab.dart      # 浏览容器（包含顶部 tabs）
-│           │   ├── search_page.dart     # 搜索页（聚合搜索）
-│           │   └── subscribe_page.dart  # 订阅页（源管理）
-│           ├── favorite_tab.dart   # 收藏 Tab
-│           ├── history_tab.dart    # 历史 Tab
-│           └── more_tab.dart       # 更多 Tab（设置）
-│
-└── rust/                            # Rust 核心
+│   ├── config/                     # 全局设置和阅读设置
+│   ├── models/                     # 漫画、章节、阅读快照等模型
+│   ├── object_box/                 # ObjectBox 实体和数据库入口
+│   ├── pages/                      # 主页面、详情、阅读器、下载、设置
+│   ├── providers/                  # 内置数据源 Provider
+│   ├── reader/                     # 阅读器控制器、布局、手势、缓存辅助
+│   ├── services/                   # 搜索、收藏、历史、下载、图片缓存等服务
+│   ├── src/rust/                   # flutter_rust_bridge 生成代码
+│   └── util/                       # 路径、前台任务数据等工具
+└── rust/
     ├── src/
-    │   ├── lib.rs                  # Rust 库入口
-    │   ├── bridge.rs               # FFI 桥接层
-    │   └── api/                     # API 实现
-    │       └── jm/                 # 禁漫天堂 API
-    │           └── mod.rs          # JM API 客户端
-    └── Cargo.toml                  # Rust 依赖配置
+    │   ├── api/                    # Rust 侧源请求实现
+    │   ├── bridge.rs               # FFI 导出函数
+    │   └── decode/                 # 图片解码/切图处理
+    └── Cargo.toml
 ```
-
-## 核心设计
-
-### 1. 底部导航结构
-
-```
-┌─────────┬─────────┬─────────┬─────────┐
-│  浏览   │  收藏   │  历史   │  更多   │
-│ Browse  │Favorite │History  │  More   │
-└─────────┴─────────┴─────────┴─────────┘
-```
-
-### 2. 浏览 Tab 结构
-
-浏览 Tab 内部包含顶部 Tabs：
-
-```
-┌─────────────────────────────────────┐
-│  浏览                               │  ← 底部导航
-├─────────────────────────────────────┤
-│  [搜索] [订阅]                      │  ← 顶部 Tabs
-├─────────────────────────────────────┤
-│                                     │
-│  搜索: 聚合搜索所有内置源           │
-│  订阅: 管理和浏览不同的内置源       │
-│                                     │
-└─────────────────────────────────────┘
-```
-
-- **搜索页**: 聚合搜索所有已订阅的数据源，显示各源的搜索结果
-- **订阅页**: 管理内置数据源的订阅，浏览各源的最新内容
-
-### 3. 数据源架构
-
-**不使用插件系统**，所有数据源都是内置的 Provider：
-
-- `BaseProvider`: 抽象基类，定义数据源接口
-- `JmProvider`: 禁漫天堂数据源实现
-- `ProviderRegistry`: 管理所有内置数据源的注册和订阅
-
-优势：
-- ✅ 架构简单，易于维护
-- ✅ 性能更好（直接调用，无需动态加载）
-- ✅ 后续扩展灵活（直接添加新 Provider 类）
-
-### 4. Rust 层设计
-
-Rust 负责：
-- HTTP 网络请求
-- 响应数据解密（JM API 需要 AES 解密）
-- HTML/JSON 解析
-- 图片处理（解密、预处理）
-
-Dart 负责：
-- UI 渲染
-- 状态管理
-- 本地存储（收藏、历史）
-- 路由导航
 
 ## 当前状态
 
 ### 已完成
 
-- ✅ 项目基础架构搭建
-- ✅ Rust 核心项目初始化
-- ✅ Flutter 层目录结构和基础组件
-- ✅ 底部导航（浏览、收藏、历史、更多）
-- ✅ 浏览 Tab 双层结构（搜索 + 订阅）
-- ✅ 数据源抽象和 JmProvider Mock 实现
-- ✅ 聚合搜索服务
-- ✅ 数据源注册表和管理
-- ✅ 基础 UI 界面
+- 应用基础骨架：`MaterialApp`、底部导航、浏览/收藏/历史/更多入口。
+- 内置 Provider 契约：搜索、详情、章节、章节图片、阅读快照、最新、排行。
+- JM 源：通过 Rust/FRB 请求，已覆盖搜索、详情、章节、图片、最新、排行和 JM 图片解码。
+- 搜索和订阅页：支持内置源聚合搜索、分页加载和源最新/排行入口。
+- 漫画详情页：透明顶栏、刷新、收藏、下载、章节列表和继续阅读。
+- 阅读器：纵向/横向阅读、左右方向、双页、章节切换、进度保存、键盘/音量键、自动滚动、阅读设置、快照缓存和预取。
+- 本地数据：ObjectBox 存储收藏、历史、下载、阅读进度、文件夹和全局设置。
+- 下载基础链路：下载任务队列、取消、重试、移除、本地章节快照和离线阅读入口。
 
-### 待实现
+### 仍需完善
 
-- ⏳ flutter_rust_bridge 配置
-- ⏳ JM API Rust 实现（参考 Breeze-plugin-JmComic）
-  - HTTP 客户端和请求签名
-  - AES 解密
-  - 响应解析
-- ⏳ 漫画详情页
-- ⏳ 阅读器
-- ⏳ 收藏功能
-- ⏳ 历史记录
-- ⏳ 本地存储（SQLite）
-- ⏳ 图片缓存
-- ⏳ 下载管理
+- Provider 管理：持久化订阅、源能力声明、源设置、账号/鉴权、错误处理。
+- 下载系统：章节选择、任务详情、并发/恢复策略、删除本地文件、平台通知和后台能力。
+- 书架体验：收藏、历史、下载仍偏分散，缺统一搜索、筛选、排序和批量操作。
+- 设置页：已有大量设置字段，但 UI 和运行时接入仍不完整。
+- 同步/备份：模型中已有同步字段，服务和页面尚未落地。
+- 文档、发布、图标、桌面窗口、日志和 CI 仍需要持续补齐。
 
-## 开发指南
+## 近期路线
 
-### 环境要求
+1. 更新文档，保证 README 和开发笔记反映当前真实状态。
+2. 迁移 Breeze 下载部分中适合 Komix 的能力，优先补章节选择、任务模型、进度展示、取消/恢复和本地记录管理。
+3. 接入哔咔源，参考 `../Breeze-plugin-bikaComic` 的接口实现，但以 Komix 内置 Provider + Rust 请求方式落地。
 
-- Flutter SDK >= 3.12.2
-- Rust >= 1.70
-- Android NDK（Android 构建）
-- Xcode（iOS/macOS 构建）
+## 开发约束
 
-### 运行项目
-
-```bash
-# 安装 Flutter 依赖
-flutter pub get
-
-# 运行（目前使用 Mock 数据，无需编译 Rust）
-flutter run
-```
-
-### 编译 Rust 库（待配置 flutter_rust_bridge）
-
-```bash
-cd rust
-cargo build --release
-```
+- 不引入动态插件运行时或 QJS 插件系统。
+- 新 Provider 默认以 `BaseProvider` 为边界，必要的请求签名、解密和解析放到 Rust。
+- 下载、阅读、收藏、历史等业务服务不应绑定具体源。
+- 运行 Flutter/Dart/Cargo 验证命令前需要开发者明确要求。
 
 ## 参考项目
 
-- [Breeze](https://github.com/deretame/Breeze) - Rust FFI 架构参考
-- [Breeze-plugin-JmComic](https://github.com/deretame/Breeze-plugin-JmComic) - JM API 契约参考
-- [jm-boom](https://github.com/ppxb/jm-boom) - Tauri 桌面端实现
+- `../Breeze`: Rust/Flutter 架构、产品行为、下载系统和书架体验参考。
+- `../Breeze-plugin-JmComic`: JM 请求签名、域名解析、响应解码和源行为参考。
+- `../Breeze-plugin-bikaComic`: 哔咔接口、认证、请求签名和数据结构参考。
 
 ## License
 
